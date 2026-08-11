@@ -1,5 +1,8 @@
 function main(args: string): number{
-    let num = ""; // if (args[i] == '+' || args[i] == '-' )
+    if (!args){
+        throw new Error("Dados não enviados");
+    }
+    let num = ""; 
     const nums: number[] = [];
     const ops: string[] = [];
     for (let i = 0; i < args.length;i++){
