@@ -27,8 +27,8 @@ class Lexer {
         this.position = this.position + 1;
         return;
       }
-      if (c == "ˆ"){
-        this.next = new Token("XOR","ˆ");
+      if (c == "^"){
+        this.next = new Token("XOR","^");
         this.position = this.position + 1;
         return;
       }
