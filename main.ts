@@ -27,6 +27,11 @@ class Lexer {
         this.position = this.position + 1;
         return;
       }
+      if (c == "ˆ"){
+        this.next = new Token("XOR","ˆ");
+        this.position = this.position + 1;
+        return;
+      }
       if (c >= "0" && c <= "9" ){
         let sum = "";
         while ( this.position < this.source.length && (this.source[this.position] >= "0" && this.source[this.position] <= "9" )){
@@ -45,12 +50,13 @@ class Parser{
     if (Parser.lexer.next.type != "INT")throw new Error("[Parser] Expected INT");
     let resultado = Number(Parser.lexer.next.value);
     Parser.lexer.selectNext()
-    while (Parser.lexer.next.type == "PLUS" || Parser.lexer.next.type == "MINUS" ){
+    while (Parser.lexer.next.type == "PLUS" || Parser.lexer.next.type == "MINUS" || Parser.lexer.next.type == "XOR"){
       let op = Parser.lexer.next.type;
       Parser.lexer.selectNext()
       if (Parser.lexer.next.type != "INT") throw new Error("[Parser] Expected INT after operator");
       if (op == "PLUS") resultado += Number(Parser.lexer.next.value);
       if (op == "MINUS") resultado -= Number(Parser.lexer.next.value);
+      if (op == "XOR") resultado ^= Number(Parser.lexer.next.value);
       Parser.lexer.selectNext()
     }
     return resultado;
