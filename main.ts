@@ -1,73 +1,100 @@
+class Lexer {
+    source: string;
+    position: number;
+    next!: Token;
+    constructor(source: string){
+        this.source = source;
+        this.position = 0;
+    }
+
+    selectNext():void{
+      //let i = this.position;
+      while (this.source[this.position] == " "){
+        this.position += 1 
+      }
+      if (this.position >= this.source.length){
+        this.next = new Token("EOF", "");
+        return; 
+      }
+      let c = this.source[this.position];
+      if (c == "+"){
+        this.next = new Token("PLUS","+")
+        this.position = this.position + 1;
+        return;
+      }
+      if (c == "-"){
+        this.next = new Token("MINUS","-");
+        this.position = this.position + 1;
+        return;
+      }
+      if (c >= "0" && c <= "9" ){
+        let sum = "";
+        while ( this.position < this.source.length && (this.source[this.position] >= "0" && this.source[this.position] <= "9" )){
+          sum += this.source[this.position];
+          this.position += 1;
+        }
+        this.next = new Token("INT",Number(sum))
+        return;
+      }
+      throw new Error("[Lexer] Invalid Symbol " + c)
+    }
+}
+class Parser{
+  static lexer: Lexer;
+  static parseExpression(): number {
+    if (Parser.lexer.next.type != "INT")throw new Error("[Parser] Expected INT");
+    let resultado = Number(Parser.lexer.next.value);
+    Parser.lexer.selectNext()
+    while (Parser.lexer.next.type == "PLUS" || Parser.lexer.next.type == "MINUS" ){
+      let op = Parser.lexer.next.type;
+      Parser.lexer.selectNext()
+      if (Parser.lexer.next.type != "INT") throw new Error("[Parser] Expected INT after operator");
+      if (op == "PLUS") resultado += Number(Parser.lexer.next.value);
+      if (op == "MINUS") resultado -= Number(Parser.lexer.next.value);
+      Parser.lexer.selectNext()
+    }
+    return resultado;
+
+  }
+  static run(code: string): number{
+    Parser.lexer = new Lexer(code);
+    Parser.lexer.selectNext();
+    const resultado = Parser.parseExpression();
+    if (Parser.lexer.next.type != "EOF"){
+      throw new Error("[Parser] Unexpected token");
+    }
+    return resultado;
+
+  }
+
+  
+}
+
+class Token {
+  type: string;
+  value: number | string;
+
+  constructor(type: string, value: number | string) {
+    this.type = type;
+    this.value = value;
+  }
+}
+
+
 function main(args: string): number{
     if (!args){
-        throw new Error("Dados não enviados");
+        throw new Error("[main] Dados não enviados");
     }
-    let num = ""; 
-    const nums: number[] = [];
-    const ops: string[] = [];
-    for (let i = 0; i < args.length;i++){
-        if (  '0' <= args[i] && args[i]  <= '9'){
-            num += args[i];
-        }
-        else{
-            if (num != ''){
-                nums.push(Number(num))
-                num = ""
-                
-            }
+    return Parser.run(args);
 
-            switch (args[i]) {
-                case '+':
-                case '-':
-                    ops.push(args[i]);
-                    break;
-                case ' ':
-                    break;
-                default:
-                    throw new Error("Caractere invalido");
-            }
-            /*
-            if (args[i] == '+' || args[i] == '-' ){
-                ops.push(args[i])
-                break;
-            }
-            if (args[i] === ' ' || args[i] == ''){
-                break;
-            }
-            else{
-                throw new Error("Os numeros nao foram enviados");
-            }*/
-            
-
-        }
-    }
-    if (num != ''){
-        nums.push(Number(num))
-        num = ""
-    }
-    if (ops.length +1 != nums.length){
-        throw new Error("Os numeros nao foram enviados");
-    }
-
-
-
-    let soma = nums[0];
-    for (let j = 0; j < ops.length;j++){
-        
-        if(ops[j] === '+'){
-            soma += nums[j + 1 ] 
-        }
-        else{
-            soma -= nums[j+1]
-        }
-
-    }
-    
-
-
-
-    return soma;
 }
 
 
 console.log(main(process.argv[2]))
+
+
+
+
+
+
+
