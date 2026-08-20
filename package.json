@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/nadertaha06/compiler-ling-par#readme",
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "tsx": "^4.23.12",
     "typescript": "6.0"
   }

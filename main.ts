@@ -90,7 +90,12 @@ function main(args: string): number{
 }
 
 
-console.log(main(process.argv[2]))
+try {
+    console.log(main(process.argv[2]))
+} catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+}
 
 
 
