@@ -89,7 +89,7 @@ function main(args: string): number{
 
 }
 
-
+main(process.argv[2])
 
 
 
