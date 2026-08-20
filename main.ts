@@ -83,19 +83,12 @@ class Token {
 
 function main(args: string): number{
     if (!args){
-        throw new Error("[main] Dados não enviados");
+        throw new Error("[Parser] error code");
     }
     return Parser.run(args);
 
 }
 
-
-try {
-    console.log(main(process.argv[2]))
-} catch (e) {
-    console.error(e instanceof Error ? e.message : String(e));
-    process.exit(1);
-}
 
 
 
