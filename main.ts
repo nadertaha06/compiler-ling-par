@@ -30,6 +30,10 @@ class Lexer {
       if ( c == "*"){
         this.next = new Token("MULTI","*");
         this.position = this.position +1;
+        if (this.source[this.position] == "*"){
+          this.next = new Token("POWER","**");
+          this.position = this.position +1;
+        }
         return;
       }
       if (c == "/"){
@@ -87,31 +91,47 @@ class Parser{
     return resultado;
     
   }
+
+  ////
   static parseFactor(): number{
-    if (Parser.lexer.next.type  == "INT"){
-      let t = Number(Parser.lexer.next.value);
-      Parser.lexer.selectNext()
-      return t;
-    }
-    if (Parser.lexer.next.type == "OPEN_PAR"){
-      Parser.lexer.selectNext();
-      //if (Parser.lexer.next.type != "INT") throw new Error("[Parser] Expected INT after operator");
-      let resultado = Parser.parseExpression();
-      if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
-      Parser.lexer.selectNext();
+      if (Parser.lexer.next.type == "MINUS"){
+          Parser.lexer.selectNext();
+          let valor = Parser.parseFactor();
+          return -Number(valor);
+      }
+      if (Parser.lexer.next.type == "PLUS"){
+          Parser.lexer.selectNext();
+          let valor = Parser.parseFactor();
+          return Number(valor);
+      }
+      return Parser.parsePower();
+  }
+
+
+  ///
+  static parsePower(): number{
+      let resultado: number;
+      
+      if (Parser.lexer.next.type == "INT"){
+          resultado = Number(Parser.lexer.next.value);   // preenche, não retorna
+          Parser.lexer.selectNext();
+      }
+      else if (Parser.lexer.next.type == "OPEN_PAR"){
+          Parser.lexer.selectNext();
+          resultado = Parser.parseExpression();           // sem 'let', reusa a variável de fora
+          if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
+          Parser.lexer.selectNext();
+      }
+      else{
+          throw new Error("[Parser] Expected INT or (");
+      }
+      
+      while (Parser.lexer.next.type == "POWER"){
+          Parser.lexer.selectNext();
+          resultado = Math.pow(resultado, Parser.parseFactor());
+      }
+      
       return resultado;
-    }
-    if (Parser.lexer.next.type == "MINUS"){
-      Parser.lexer.selectNext();
-      let valor = Parser.parseFactor();
-      return -Number(valor);
-    }
-    if (Parser.lexer.next.type == "PLUS"){
-      Parser.lexer.selectNext();
-      let valor = Parser.parseFactor();
-      return Number(valor);
-    }
-    throw new Error("[Parser] Expected INT or ( after operator");
   }
   static run(code: string): number{
     Parser.lexer = new Lexer(code);
