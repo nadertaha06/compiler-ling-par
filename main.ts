@@ -61,37 +61,35 @@ class Lexer {
 }
 class Parser{
   static lexer: Lexer;
-  static parseExpression(): number {
+  static parseExpression(): Node {
     let resultado = Parser.parseTerm()
     while (Parser.lexer.next.type == "PLUS" || Parser.lexer.next.type == "MINUS" ){
       let op = Parser.lexer.next.type;
       Parser.lexer.selectNext()
-      if (op == "PLUS") resultado += Parser.parseTerm()
-      if (op == "MINUS") resultado -= Parser.parseTerm()
+      if (op == "PLUS") resultado = new BinOp("+",resultado,Parser.parseTerm())
+      if (op == "MINUS") resultado = new BinOp("-",resultado,Parser.parseTerm())
     }
     return resultado;
 
   }
-  static parseTerm(): number{
+  static parseTerm(): Node{
     let resultado = Parser.parseFactor();
     while (Parser.lexer.next.type == "MULTI" || Parser.lexer.next.type == "DIV" ){
       let op = Parser.lexer.next.type;
       Parser.lexer.selectNext()
-      if (op == "MULTI") resultado *= Parser.parseFactor();
+      if (op == "MULTI") resultado = new BinOp("*",resultado,Parser.parseFactor());
       if (op == "DIV" ) {
-        let value = Parser.parseFactor();
-        if (value == 0 ) throw new Error("[Parser] Division by zero");
-        resultado = Math.trunc(resultado / value);
+        resultado = new BinOp("/",resultado,Parser.parseFactor())
       }
     }
     return resultado;
     
   }
-  static parseFactor(): number{
+  static parseFactor(): Node{
     if (Parser.lexer.next.type  == "INT"){
       let t = Number(Parser.lexer.next.value);
       Parser.lexer.selectNext()
-      return t;
+      return new IntVal(t);
     }
     if (Parser.lexer.next.type == "OPEN_PAR"){
       Parser.lexer.selectNext();
@@ -104,16 +102,16 @@ class Parser{
     if (Parser.lexer.next.type == "MINUS"){
       Parser.lexer.selectNext();
       let valor = Parser.parseFactor();
-      return -Number(valor);
+      return new UnOp('-',valor);
     }
     if (Parser.lexer.next.type == "PLUS"){
       Parser.lexer.selectNext();
       let valor = Parser.parseFactor();
-      return Number(valor);
+      return new UnOp("+",valor);
     }
     throw new Error("[Parser] Expected INT or ( after operator");
   }
-  static run(code: string): number{
+  static run(code: string): Node{
     Parser.lexer = new Lexer(code);
     Parser.lexer.selectNext();
     const resultado = Parser.parseExpression();
@@ -136,13 +134,69 @@ class Token {
     this.value = value;
   }
 }
+abstract class Node {
+  value: number | string;
+  children: Node[];
+  abstract evaluate(): number;
+  constructor(value: number | string,children: Node[]) {
+    this.value = value;
+    this.children = children;
+  }
+}
+
+class IntVal extends Node {
+    constructor(value:number){
+      super(value,[])
+    }
+    evaluate(): number{
+      return Number(this.value);
+    }
+}
+
+class UnOp extends Node{
+  constructor(value:string,filho: Node){
+    super(value,[filho]);
+  }
+  evaluate(): number {
+      let valorDoFilho = this.children[0]?.evaluate();
+      if (this.value == "-") {
+          return -valorDoFilho;
+      } else {
+          return valorDoFilho;
+      }
+  }
+}
+
+class BinOp extends Node{
+  constructor(value:string,n1:Node,n2:Node){
+    super(value,[n1,n2])
+  }
+  evaluate(): number {
+    let p = this.children[0]?.evaluate();
+    let j = this.children[1]?.evaluate();
+    let op = this.value;
+    if (op == "+"){
+      return p + j;
+
+    }else if (op == "-"){
+      return p - j;
+    }else if (op == "*"){
+      return p * j;
+    }else if (op == "/"){
+      if (j == 0) throw new Error("[Semantic] Division by zero");
+      return Math.trunc(p/j); 
+    }
+    throw new Error("[Semantic] Invalid Symbol " + this.value)
+  }
+}
 
 
 function main(args: string): number{
     if (!args){
         throw new Error("[Parser] error code");
     }
-    return Parser.run(args);
+    let resultado = Parser.run(args);
+    return resultado.evaluate();
 
 }
 
