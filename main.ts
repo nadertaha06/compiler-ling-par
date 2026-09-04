@@ -47,6 +47,11 @@ class Lexer {
         this.position = this.position +1;
         return;
       }
+      if (c == "!"){
+        this.next = new Token("FACT","!");
+        this.position = this.position +1;
+        return;
+      }
       if (c >= "0" && c <= "9" ){
         let sum = "";
         while ( this.position < this.source.length && (this.source[this.position] >= "0" && this.source[this.position] <= "9" )){
@@ -86,30 +91,31 @@ class Parser{
     
   }
   static parseFactor(): Node{
-    if (Parser.lexer.next.type  == "INT"){
-      let t = Number(Parser.lexer.next.value);
-      Parser.lexer.selectNext()
-      return new IntVal(t);
+    let resultado: Node;
+
+    if (Parser.lexer.next.type == "INT"){
+        let t = Number(Parser.lexer.next.value);
+        Parser.lexer.selectNext();
+        resultado = new IntVal(t);
+    }else if (Parser.lexer.next.type == "OPEN_PAR"){
+        Parser.lexer.selectNext();
+        resultado = Parser.parseExpression();
+        if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
+        Parser.lexer.selectNext();
+    }else if (Parser.lexer.next.type == "MINUS"){
+        Parser.lexer.selectNext();
+        resultado = new UnOp('-', Parser.parseFactor());
+    }else if (Parser.lexer.next.type == "PLUS"){
+        Parser.lexer.selectNext();
+        resultado = new UnOp('+', Parser.parseFactor());
+    }else {
+        throw new Error("[Parser] Expected INT or ( after operator");
     }
-    if (Parser.lexer.next.type == "OPEN_PAR"){
-      Parser.lexer.selectNext();
-      //if (Parser.lexer.next.type != "INT") throw new Error("[Parser] Expected INT after operator");
-      let resultado = Parser.parseExpression();
-      if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
-      Parser.lexer.selectNext();
-      return resultado;
+    if (Parser.lexer.next.type == "FACT"){
+        Parser.lexer.selectNext();
+        resultado = new UnOp('!', resultado);
     }
-    if (Parser.lexer.next.type == "MINUS"){
-      Parser.lexer.selectNext();
-      let valor = Parser.parseFactor();
-      return new UnOp('-',valor);
-    }
-    if (Parser.lexer.next.type == "PLUS"){
-      Parser.lexer.selectNext();
-      let valor = Parser.parseFactor();
-      return new UnOp("+",valor);
-    }
-    throw new Error("[Parser] Expected INT or ( after operator");
+    return resultado;
   }
   static run(code: string): Node{
     Parser.lexer = new Lexer(code);
@@ -159,11 +165,19 @@ class UnOp extends Node{
   }
   evaluate(): number {
       let valorDoFilho = this.children[0]?.evaluate();
+   
       if (this.value == "-") {
           return -valorDoFilho;
-      } else {
+      } else if (this.value == "+"){
           return valorDoFilho;
-      }
+      }else if (this.value == "!"){
+        if (valorDoFilho < 0) throw new Error("[Semantic] Factorial of negative number");
+        let resultado = 1;
+        for (let i = valorDoFilho; i > 0;i--){
+            resultado *= i;
+        }
+        return resultado;
+      }else throw new Error("[Semantic] Valor negativo nao e valido")
   }
 }
 
