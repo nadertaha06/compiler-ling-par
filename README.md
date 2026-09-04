@@ -4,10 +4,10 @@
 
 ![Diagrama Sintático](https://compiler-tester.insper-comp.com.br/ds?version=v1.2)
 
-​```ebnf
+```ebnf
 EXPRESSION = TERM, { ("+" | "-"), TERM } ;
 TERM = FACTOR, { ("*" | "/"), FACTOR } ;
 FACTOR = ("+" | "-"), FACTOR | "(", EXPRESSION, ")" | NUMBER ;
 NUMBER = DIGIT, {DIGIT} ;
 DIGIT = 0 | 1 | ... | 9 ;
-​```
+```
