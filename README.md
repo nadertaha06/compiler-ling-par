@@ -7,7 +7,7 @@
 ```ebnf
 EXPRESSION = TERM, { ("+" | "-"), TERM } ;
 TERM = FACTOR, { ("*" | "/"), FACTOR } ;
-FACTOR = ("+" | "-"), FACTOR | "(", EXPRESSION, ")" | NUMBER ;
+FACTOR = NUMBER | ("+" | "-"), FACTOR | "(", EXPRESSION, ")" ;
 NUMBER = DIGIT, {DIGIT} ;
-DIGIT = 0 | 1 | ... | 9 ;
+DIGIT = "0" | "1" | ... | "9" ;
 ```
