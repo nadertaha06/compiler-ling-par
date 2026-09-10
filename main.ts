@@ -145,33 +145,28 @@ class Parser{
     let resultado: Node;
     if (Parser.lexer.next.type == "CONST"){
       Parser.lexer.selectNext();
-      if (Parser.lexer.next.type == "IDEN"){
-        let temp = Parser.lexer.next.value;
-        Parser.lexer.selectNext();
-        let name = new Identifier(temp)
-        if (Parser.lexer.next.type == "ASSIGN"){
-          Parser.lexer.selectNext();
-          resultado = new Assignment(name , Parser.parseExpression(),false)
-        }
-      }
+      if (Parser.lexer.next.type != "IDEN") throw new Error("[Parser] Expected identifier after const");
+      let temp = Parser.lexer.next.value;
+      Parser.lexer.selectNext();
+      let name = new Identifier(temp)
+      if (Parser.lexer.next.type != "ASSIGN") throw new Error("[Parser] Expected = in const declaration");
+      Parser.lexer.selectNext();
+      resultado = new Assignment(name , Parser.parseExpression(),false)
     }else if (Parser.lexer.next.type == "IDEN"){
       let temp = Parser.lexer.next.value;
       Parser.lexer.selectNext();
       let name = new Identifier(temp)
-      if (Parser.lexer.next.type == "ASSIGN"){
-        Parser.lexer.selectNext();
-        resultado = new Assignment(name , Parser.parseExpression(),true)
-      }
+      if (Parser.lexer.next.type != "ASSIGN") throw new Error("[Parser] Expected = after identifier");
+      Parser.lexer.selectNext();
+      resultado = new Assignment(name , Parser.parseExpression(),true)
     }else if (Parser.lexer.next.type == "PRINT"){
       Parser.lexer.selectNext();
-      if (Parser.lexer.next.type == "OPEN_PAR"){
-        Parser.lexer.selectNext();
-        let exp = Parser.parseExpression();
-        if (Parser.lexer.next.type == "CLOSE_PAR"){
-          Parser.lexer.selectNext();
-          resultado = new Print(exp);
-        }else throw new Error("[Parser] ( Open with no close")
-      }
+      if (Parser.lexer.next.type != "OPEN_PAR") throw new Error("[Parser] Expected ( after Println");
+      Parser.lexer.selectNext();
+      let exp = Parser.parseExpression();
+      if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] ( Open with no close");
+      Parser.lexer.selectNext();
+      resultado = new Print(exp);
     }else if (Parser.lexer.next.type == "END"){
       resultado = new NoOp()
     }else{
