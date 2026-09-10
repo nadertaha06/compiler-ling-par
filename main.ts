@@ -1,4 +1,4 @@
-import fs = require('fs');
+const fs = require('fs');
 
 class Lexer {
     source: string;
