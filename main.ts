@@ -67,7 +67,10 @@ class Lexer {
           }
           if (word == "Println"){
               this.next = new Token("PRINT", word);
-          } else {
+          }else if ( word == "const"){
+              this.next = new Token("CONST",word);
+          }
+          else {
               this.next = new Token("IDEN", word);
           }
           return;
@@ -139,36 +142,47 @@ class Parser{
     return resultado;
   }
   static parseStatement(): Node{
-      let resultado: Node; 
+    let resultado: Node;
+    if (Parser.lexer.next.type == "CONST"){
+      Parser.lexer.selectNext();
       if (Parser.lexer.next.type == "IDEN"){
         let temp = Parser.lexer.next.value;
         Parser.lexer.selectNext();
         let name = new Identifier(temp)
         if (Parser.lexer.next.type == "ASSIGN"){
           Parser.lexer.selectNext();
-          resultado = new Assignment(name , Parser.parseExpression())
+          resultado = new Assignment(name , Parser.parseExpression(),false)
         }
-      }else if (Parser.lexer.next.type == "PRINT"){
-        Parser.lexer.selectNext(); 
-        if (Parser.lexer.next.type == "OPEN_PAR"){
-          Parser.lexer.selectNext();
-          let exp = Parser.parseExpression();
-          if (Parser.lexer.next.type == "CLOSE_PAR"){
-            Parser.lexer.selectNext();
-            resultado = new Print(exp);
-          }else throw new Error("[Parser] ( Open with no close")
-        }
-      }else if (Parser.lexer.next.type == "END"){
-        resultado = new NoOp()
-      }else{
-        throw new Error("[Parser] Unexpected token at start of statement")
       }
-      if (Parser.lexer.next.type != "END"){
-        throw new Error("[Parser] Expected end of line")
-      }
+    }else if (Parser.lexer.next.type == "IDEN"){
+      let temp = Parser.lexer.next.value;
       Parser.lexer.selectNext();
+      let name = new Identifier(temp)
+      if (Parser.lexer.next.type == "ASSIGN"){
+        Parser.lexer.selectNext();
+        resultado = new Assignment(name , Parser.parseExpression(),true)
+      }
+    }else if (Parser.lexer.next.type == "PRINT"){
+      Parser.lexer.selectNext();
+      if (Parser.lexer.next.type == "OPEN_PAR"){
+        Parser.lexer.selectNext();
+        let exp = Parser.parseExpression();
+        if (Parser.lexer.next.type == "CLOSE_PAR"){
+          Parser.lexer.selectNext();
+          resultado = new Print(exp);
+        }else throw new Error("[Parser] ( Open with no close")
+      }
+    }else if (Parser.lexer.next.type == "END"){
+      resultado = new NoOp()
+    }else{
+      throw new Error("[Parser] Unexpected token at start of statement")
+    }
+    if (Parser.lexer.next.type != "END"){
+      throw new Error("[Parser] Expected end of line")
+    }
+    Parser.lexer.selectNext();
 
-      return resultado;
+    return resultado;
   }
 
 
@@ -204,18 +218,20 @@ class Token {
   }
 }
 abstract class Node {
-  value: number | string;
+  value: number | string | boolean;
   children: Node[];
   abstract evaluate(st: SymbolTable): number | void;
-  constructor(value: number | string,children: Node[]) {
+  constructor(value: number | string | boolean,children: Node[]) {
     this.value = value;
     this.children = children;
   }
 }
 class Variable{
   value: number;
-  constructor(value:number){
+  mutable: boolean;
+  constructor(value:number,mutable: boolean){
     this.value = value;
+    this.mutable = mutable;
   }
 }
 
@@ -238,12 +254,12 @@ class Block extends Node{
   }
 }
 class Assignment extends Node{
-  constructor(variavel:Node,value:Node){
-    super("",[variavel,value])
+  constructor(variavel:Node,value:Node,mutable:boolean){
+    super(mutable,[variavel,value])
   }
   evaluate(st: SymbolTable): number | void {
     let exp = this.children[1]?.evaluate(st);
-    st.guardar(this.children[0]?.value,exp)
+    st.guardar(this.children[0]?.value,exp,this.value)
   }
 }
 class NoOp extends Node{
@@ -275,14 +291,22 @@ class SymbolTable{
     set table(valor:Record<string, Variable>) {
       this._table = valor
     }
-    guardar(nome: string, value: number): void{
-      this._table[nome] = new Variable(value);
-    }
+
     buscar(nome:string): number{
       if (nome in this._table){
         return this._table[nome]?.value
       }
       throw new Error("[Semantic] varible not denfined")
+    }
+    guardar(nome: string, value: number,mutable: boolean): void{
+      if (!(nome in this._table)){
+        this._table[nome] = new Variable(value,mutable);
+      }else if ((nome in this._table) && !(this._table[nome].mutable)){
+        throw new Error("[Semantic] Cannot change the value of an immutable variable")
+      }else{
+        this._table[nome] = new Variable(value,mutable);
+      }
+      
     }
 }
 
@@ -336,7 +360,17 @@ class BinOp extends Node{
 
 class Prepro {
     static filter(code: string): string {
-        return code.replace(/\/\/[^\n]*/g, '');
+        code = code.replace(/\/\/[^\n]*/g, '');
+        const constantes: { nome: string, valor: string }[] = [];
+        code = code.replace(/define\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(\d+)\s*\n/g, (match, nome, valor) => {
+            constantes.push({ nome, valor });
+            return '';
+        });
+        for (const c of constantes) {
+            code = code.replace(new RegExp(`\\b${c.nome}\\b`, 'g'), c.valor);
+        }
+
+        return code;
     }
 }
 
