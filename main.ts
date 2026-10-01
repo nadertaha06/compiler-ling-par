@@ -318,6 +318,10 @@ class Parser{
         let block = Parser.parseBlock();
         resultado = new While(exp,block);
       }
+      // BLOCO SOLTO
+      else if (Parser.lexer.next.type == "OPEN_BRA"){
+        resultado = Parser.parseBlock();
+      }
       
       
       else if (Parser.lexer.next.type == "END"){
@@ -336,6 +340,10 @@ class Parser{
   static parseBlock(): Block{
     const lines: Node[] = [];
     if(Parser.lexer.next.type == "OPEN_BRA"){
+      Parser.lexer.selectNext();
+      if (Parser.lexer.next.type != "END"){
+        throw new Error("[Parser] Expected newline after {");
+      }
       Parser.lexer.selectNext();
       while (Parser.lexer.next.type != "CLOSE_BRA"){
         let line = Parser.parseStatement();
@@ -641,9 +649,3 @@ function main(nomeArquivo: string): number|void|string{
 }
 
 main(process.argv[2])
-
-
-
-
-
-
