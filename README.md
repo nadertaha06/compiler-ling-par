@@ -6,10 +6,14 @@
 
 ```ebnf
 PROGRAM = { STATEMENT } ;
-STATEMENT = ("Println", "(", EXPRESSION, ")" | IDENTIFIER, "=", EXPRESSION | Ε), "\n" ;
-EXPRESSION = TERM, { ("+" | "-"), TERM } ;
-TERM = FACTOR, { ("*" | "/"), FACTOR } ;
-FACTOR = NUMBER | IDENTIFIER | ("+" | "-"), FACTOR | "(", EXPRESSION, ")" ;
+STATEMENT = ( "Println", "(", BOOL_EXPRESSION, ")" | IDENTIFIER, "=", BOOL_EXPRESSION | "if", BOOL_EXPRESSION, BLOCK, [ "else", BLOCK ] | "for", BOOL_EXPRESSION, BLOCK | Ε ), "\n" ;
+BLOCK = "{", { STATEMENT }, "}" ;
+BOOL_EXPRESSION = BOOL_TERM, { "||", BOOL_TERM } ;
+BOOL_TERM = REL_EXPRESSION, { "&&", REL_EXPRESSION } ;
+REL_EXPRESSION = EXPRESSION, [ ( "==" | ">" | "<" ), EXPRESSION ] ;
+EXPRESSION = TERM, { ( "+" | "-" ), TERM } ;
+TERM = FACTOR, { ( "*" | "/" ), FACTOR } ;
+FACTOR = NUMBER | IDENTIFIER | ( "+" | "-" | "!" ), FACTOR | "(", BOOL_EXPRESSION, ")" | "Scanln", "(", ")" ;
 IDENTIFIER = LETTER, { LETTER | DIGIT | "_" } ;
 NUMBER = DIGIT, { DIGIT } ;
 LETTER = "a" | "b" | ... | "z" | "A" | "B" | ... | "Z" ;
