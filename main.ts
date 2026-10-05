@@ -303,14 +303,36 @@ class Parser{
     return new Assignment(name, Parser.parseBoolExpression());
   }
   static ehForTresPartes(): boolean{
-    if (Parser.lexer.next.type != "ASSIGN"){return false};
+    if (Parser.lexer.next.type != "IDEN"){return false};
     let salva_pos = Parser.lexer.position;
     let salva_next = Parser.lexer.next;
     Parser.lexer.selectNext();
-    let resultado = (Parser.lexer.next.type == "IDEN");
+    let resultado = (Parser.lexer.next.type == "ASSIGN");
     Parser.lexer.position = salva_pos;
     Parser.lexer.next = salva_next;
     return resultado;
+  }
+  // FOR de tres partes (comParenteses = true para "for (init; cond; passo) {")
+  static parseForTresPartes(comParenteses: boolean): Node{
+    let init = Parser.parseAssignment();
+    if (Parser.lexer.next.type != "SEMICOL"){
+      throw new Error("[Parser]Expected ; after for init ")
+    }
+    Parser.lexer.selectNext();
+    let cond = Parser.parseBoolExpression();
+    if (Parser.lexer.next.type != "SEMICOL"){
+      throw new Error("[Parser]Expected ; after for condition ")
+    }
+    Parser.lexer.selectNext();
+    let passo = Parser.parseAssignment();
+    if (comParenteses){
+      if (Parser.lexer.next.type != "CLOSE_PAR"){
+        throw new Error("[Parser] Expected ) after for step")
+      }
+      Parser.lexer.selectNext();
+    }
+    let corpo = Parser.parseBlock();
+    return new Block([ init, new While(cond, new Block([ corpo, passo ])) ]);
   }
   // STATEMENT 
   static parseStatement(): Node{
@@ -348,20 +370,21 @@ class Parser{
       // WHILE
       else if (Parser.lexer.next.type == "WHILE"){
         Parser.lexer.selectNext();
-        if (Parser.ehForTresPartes()){
-          let init = Parser.parseAssignment();
-          if (Parser.lexer.next.type != "SEMICOL"){
-            throw new Error("[Parser]Expected ; after for init ")
-          }
+        if (Parser.lexer.next.type == "OPEN_PAR"){
+          let salva_pos = Parser.lexer.position;
+          let salva_next = Parser.lexer.next;
           Parser.lexer.selectNext();
-          let cond = Parser.parseBoolExpression();
-          if (Parser.lexer.next.type != "SEMICOL"){
-            throw new Error("[Parser]Expected ; after for condition ")
+          if (Parser.ehForTresPartes()){
+            resultado = Parser.parseForTresPartes(true);
+          }else {
+            Parser.lexer.position = salva_pos;
+            Parser.lexer.next = salva_next;
+            let exp = Parser.parseBoolExpression();
+            let block = Parser.parseBlock();
+            resultado = new While(exp,block);
           }
-          Parser.lexer.selectNext();
-          let passo = Parser.parseAssignment();
-          let corpo = Parser.parseBlock();
-          resultado = new Block([ init, new While(cond, new Block([ corpo, passo ])) ])
+        }else if (Parser.ehForTresPartes()){
+          resultado = Parser.parseForTresPartes(false);
         }else {
           let exp = Parser.parseBoolExpression();
           let block = Parser.parseBlock();
