@@ -7,13 +7,13 @@
 ```ebnf
 PROGRAM = { STATEMENT } ;
 BLOCK = "{", "\n", { STATEMENT }, "}" ;
-STATEMENT = ( ( "Println", "(", BOOLEXPRESSION, ")" ) | ( "for", BOOLEXPRESSION, BLOCK ) | ( "if", BOOLEXPRESSION, BLOCK, ( "\n", "else", BLOCK ) | Ε ) | ( IDENTIFIER, "=", BOOLEXPRESSION ) | BLOCK | Ε ), "\n" ;
+STATEMENT = ( ( "Println", "(", BOOLEXPRESSION, ")" ) | ( "for", BOOLEXPRESSION, BLOCK ) | ( "for", IDENTIFIER, "=", BOOLEXPRESSION, ";", BOOLEXPRESSION, ";", IDENTIFIER, "=", BOOLEXPRESSION, BLOCK ) | ( "if", BOOLEXPRESSION, BLOCK, ( "\n", "else", BLOCK ) | Ε ) | ( IDENTIFIER, "=", BOOLEXPRESSION ) | BLOCK | Ε ), "\n" ;
 BOOLEXPRESSION = BOOLTERM, { "||", BOOLTERM } ;
 BOOLTERM = RELEXPRESSION, { "&&", RELEXPRESSION } ;
 RELEXPRESSION = EXPRESSION, { ( "==" | ">" | "<" ), EXPRESSION } ;
 EXPRESSION = TERM, { ( "+" | "-" ), TERM } ;
 TERM = FACTOR, { ( "*" | "/" ), FACTOR } ;
-FACTOR = NUMBER | IDENTIFIER | ( "+" | "-" ), FACTOR | "(", BOOLEXPRESSION, ")" | "Scanln", "(", ")" ;
+FACTOR = NUMBER | IDENTIFIER | ( "+" | "-" ), FACTOR | "(", BOOLEXPRESSION, ")" | "Scanln", "(", ")" | ( "if", BOOLEXPRESSION, "{", BOOLEXPRESSION, "}", "else", "{", BOOLEXPRESSION, "}" ) ;
 IDENTIFIER = LETTER, { LETTER | DIGIT | "_" } ;
 NUMBER = DIGIT, { DIGIT } ;
 LETTER = "a" | "b" | ... | "z" | "A" | "B" | ... | "Z" ;

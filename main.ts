@@ -96,6 +96,11 @@ class Lexer {
         this.position += 1;
         return;
       }
+      if (c == ";"){
+        this.next = new Token("SEMICOL", ";");
+        this.position += 1;
+        return;
+      }
       if (c == ">"){
         this.next = new Token("GT",">")
         this.position += 1;
@@ -260,6 +265,22 @@ class Parser{
           throw new Error("[Parser] Expected '(' after Scanln");
         }
         
+    }else if (Parser.lexer.next.type == "IF"){
+      Parser.lexer.selectNext();
+      let op = Parser.parseBoolExpression();
+      if (Parser.lexer.next.type != "OPEN_BRA"){throw new Error("[Parser] Expected '{' after if")}
+      Parser.lexer.selectNext();
+      let c1 = Parser.parseBoolExpression();
+      if (Parser.lexer.next.type != "CLOSE_BRA"){throw new Error("[Parser] Bra opend with now close")}
+      Parser.lexer.selectNext();
+      if (Parser.lexer.next.type != "ELSE"){throw new Error("[Parser] Expected else after if expression")}
+      Parser.lexer.selectNext();
+      if (Parser.lexer.next.type != "OPEN_BRA"){throw new Error("[Parser] Expected '{' after else")}
+      Parser.lexer.selectNext();
+      let c2 = Parser.parseBoolExpression();
+      if (Parser.lexer.next.type != "CLOSE_BRA"){throw new Error("[Parser] Bra opend with now close")}
+      Parser.lexer.selectNext();
+      resultado = new IfExpr(op,c1,c2)
     }
     else {
         throw new Error("[Parser] Expected number, identifier, '(', '!', '+', '-' or Scanln");
@@ -268,22 +289,35 @@ class Parser{
   }
 
 
-
-
+  static parseAssignment(): Node{
+    if (Parser.lexer.next.type != "IDEN"){
+      throw new Error("[Parser] Expected identifier");
+    }
+    let temp = Parser.lexer.next.value;
+    Parser.lexer.selectNext();
+    let name = new Identifier(temp as string);
+    if (Parser.lexer.next.type != "ASSIGN"){
+      throw new Error("[Parser] Expected '=' after identifier");
+    }
+    Parser.lexer.selectNext();
+    return new Assignment(name, Parser.parseBoolExpression());
+  }
+  static ehForTresPartes(): boolean{
+    if (Parser.lexer.next.type != "ASSIGN"){return false};
+    let salva_pos = Parser.lexer.position;
+    let salva_next = Parser.lexer.next;
+    Parser.lexer.selectNext();
+    let resultado = (Parser.lexer.next.type == "IDEN");
+    Parser.lexer.position = salva_pos;
+    Parser.lexer.next = salva_next;
+    return resultado;
+  }
   // STATEMENT 
   static parseStatement(): Node{
       let resultado: Node; 
       //ex: x = 10
       if (Parser.lexer.next.type == "IDEN"){
-        let temp = Parser.lexer.next.value;
-        Parser.lexer.selectNext();
-        let name = new Identifier(temp)
-        if (Parser.lexer.next.type == "ASSIGN"){
-          Parser.lexer.selectNext();
-          resultado = new Assignment(name , Parser.parseBoolExpression())
-        }else {
-          throw new Error("[Parser] Expected '=' after identifier")
-        }
+        resultado = Parser.parseAssignment();
       }// Print
       else if (Parser.lexer.next.type == "PRINT"){
         Parser.lexer.selectNext(); 
@@ -314,9 +348,25 @@ class Parser{
       // WHILE
       else if (Parser.lexer.next.type == "WHILE"){
         Parser.lexer.selectNext();
-        let exp = Parser.parseBoolExpression();
-        let block = Parser.parseBlock();
-        resultado = new While(exp,block);
+        if (Parser.ehForTresPartes()){
+          let init = Parser.parseAssignment();
+          if (Parser.lexer.next.type != "SEMICOL"){
+            throw new Error("[Parser]Expected ; after for init ")
+          }
+          Parser.lexer.selectNext();
+          let cond = Parser.parseBoolExpression();
+          if (Parser.lexer.next.type != "SEMICOL"){
+            throw new Error("[Parser]Expected ; after for condition ")
+          }
+          Parser.lexer.selectNext();
+          let passo = Parser.parseAssignment();
+          let corpo = Parser.parseBlock();
+          resultado = new Block([ init, new While(cond, new Block([ corpo, passo ])) ])
+        }else {
+          let exp = Parser.parseBoolExpression();
+          let block = Parser.parseBlock();
+          resultado = new While(exp,block);
+        }
       }
       // BLOCO SOLTO
       else if (Parser.lexer.next.type == "OPEN_BRA"){
@@ -567,7 +617,19 @@ class If extends Node{
     }
   }
 }
-
+class IfExpr extends Node{
+  constructor(value:Node, c1:Node,c2:Node){
+    super("",[value,c1,c2])
+  }
+  evaluate(st: SymbolTable): number | void {
+    let condition = this.children[0]?.evaluate(st);
+    if (condition != 0){
+      return this.children[1]?.evaluate(st);
+    }else{
+      return this.children[2]?.evaluate(st);
+    }
+  }
+}
 
 class While extends Node{
   constructor(value:Node,op:Node){
