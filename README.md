@@ -7,15 +7,18 @@
 ```ebnf
 PROGRAM = { STATEMENT } ;
 BLOCK = "{", "\n", { STATEMENT }, "}" ;
-STATEMENT = ( ( "Println", "(", BOOLEXPRESSION, ")" ) | ( "for", BOOLEXPRESSION, BLOCK ) | ( "if", BOOLEXPRESSION, BLOCK, ( "\n", "else", BLOCK ) | Ε ) | ( IDENTIFIER, "=", BOOLEXPRESSION ) | BLOCK | Ε ), "\n" ;
+STATEMENT = ( ( "var", IDENTIFIER, TYPE, [ "=", BOOLEXPRESSION ] ) | ( "Println", "(", BOOLEXPRESSION, ")" ) | ( "for", BOOLEXPRESSION, BLOCK ) | ( "if", BOOLEXPRESSION, BLOCK, ( "\n", "else", BLOCK ) | Ε ) | ( IDENTIFIER, "=", BOOLEXPRESSION ) | BLOCK | Ε ), "\n" ;
 BOOLEXPRESSION = BOOLTERM, { "||", BOOLTERM } ;
 BOOLTERM = RELEXPRESSION, { "&&", RELEXPRESSION } ;
 RELEXPRESSION = EXPRESSION, { ( "==" | ">" | "<" ), EXPRESSION } ;
 EXPRESSION = TERM, { ( "+" | "-" ), TERM } ;
 TERM = FACTOR, { ( "*" | "/" ), FACTOR } ;
-FACTOR = NUMBER | IDENTIFIER | ( "+" | "-" ), FACTOR | "(", BOOLEXPRESSION, ")" | "Scanln", "(", ")" ;
+FACTOR = NUMBER | STRING | BOOL | IDENTIFIER | ( ( "+" | "-" | "!" ), FACTOR ) | "(", BOOLEXPRESSION, ")" | "Scanln", "(", ")" ;
+TYPE = "int" | "string" | "bool" ;
+BOOL = "true" | "false" ;
 IDENTIFIER = LETTER, { LETTER | DIGIT | "_" } ;
 NUMBER = DIGIT, { DIGIT } ;
+STRING = '"', { ? any character except '"' ? }, '"' ;
 LETTER = "a" | "b" | ... | "z" | "A" | "B" | ... | "Z" ;
 DIGIT = "0" | "1" | ... | "9" ;
 ```
