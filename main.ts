@@ -721,8 +721,8 @@ class BinOp extends Node{
     let j = this.children[1]?.evaluate(st);
     let op = this.value;
     if (op == "+"){
-      if (tipoDe(p) == "string" && tipoDe(j) == "string"){
-        return (p as string) + (j as string);
+      if (tipoDe(p) == "string" || tipoDe(j) == "string"){
+        return String(p) + String(j);
       }
       return (exigir(p, "int") as number) + (exigir(j, "int") as number);
     }else if (op == "-"){
