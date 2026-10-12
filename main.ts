@@ -1,5 +1,23 @@
 const fs = require('fs');
 
+type Valor = number | string | boolean;
+
+// "int" | "string" | "bool" a partir do valor que o JS guarda
+function tipoDe(v: Valor | void | undefined): string {
+  if (typeof v === "number") return "int";
+  if (typeof v === "string") return "string";
+  if (typeof v === "boolean") return "bool";
+  throw new Error("[Semantic] expression has no value");
+}
+
+// confere o tipo e devolve o valor; erro [Semantic] se nao bater
+function exigir(v: Valor | void | undefined, tipo: string): Valor {
+  if (tipoDe(v) != tipo){
+    throw new Error("[Semantic] expected " + tipo + " but got " + tipoDe(v));
+  }
+  return v as Valor;
+}
+
 class Lexer {
     source: string;
     position: number;
@@ -106,6 +124,21 @@ class Lexer {
         this.position += 1;
         return;
       }
+      if (c == '\"'){
+        let st = ""
+        this.position += 1;
+        while (this.position < this.source.length && this.source[this.position] != '\"'){
+          st += this.source[this.position];
+          this.position += 1;
+        }
+        if (this.source[this.position] == '\"'){
+            this.next = new Token("STR",st)
+            this.position += 1;
+        }else{
+          throw new Error("[Lexer] open quotes but not closed")
+        }
+        return;
+      }
       if (/^[a-zA-Z]$/.test(c)) {
           let word = "";
           while (this.position < this.source.length && /^[a-zA-Z0-9_]$/.test(this.source[this.position])){
@@ -122,6 +155,19 @@ class Lexer {
               this.next = new Token("ELSE",word);
           }else if (word == "Scanln"){
               this.next = new Token("READ",word);
+          }
+          else if (word == "var"){
+              this.next = new Token("VAR",word);
+          }else if (word == "true"){
+              this.next = new Token("BOOL",true);
+          }else if (word == "false"){
+              this.next = new Token("BOOL",false)
+          }else if (word == "string"){
+              this.next = new Token("TYPE",word)
+          }else if (word == "int"){
+              this.next = new Token("TYPE",word)
+          }else if (word == "bool"){
+              this.next = new Token("TYPE",word);
           }
           else {
               this.next = new Token("IDEN", word);
@@ -239,13 +285,23 @@ class Parser{
         Parser.lexer.selectNext();
         resultado = new UnOp('+', Parser.parseFactor());
     }else if (Parser.lexer.next.type == "IDEN"){
-        let temp = Parser.lexer.next.value;
+        let temp = Parser.lexer.next.value as string;
         Parser.lexer.selectNext();
         resultado = new Identifier(temp)
     }else if (Parser.lexer.next.type == "NOT"){
         Parser.lexer.selectNext();
         resultado = new UnOp('!',Parser.parseFactor());
-    }else if (Parser.lexer.next.type == "READ"){
+    }else if (Parser.lexer.next.type == "BOOL"){
+        let temp = Parser.lexer.next.value as boolean;
+        Parser.lexer.selectNext();
+        resultado = new BoolVal(temp);
+    }
+    else if (Parser.lexer.next.type == "STR"){
+        let temp = Parser.lexer.next.value as string;
+        Parser.lexer.selectNext();
+        resultado = new StringVal(temp);
+    }
+    else if (Parser.lexer.next.type == "READ"){
         Parser.lexer.selectNext();
         if (Parser.lexer.next.type == "OPEN_PAR"){
           Parser.lexer.selectNext();
@@ -275,7 +331,7 @@ class Parser{
       let resultado: Node; 
       //ex: x = 10
       if (Parser.lexer.next.type == "IDEN"){
-        let temp = Parser.lexer.next.value;
+        let temp = Parser.lexer.next.value as string;
         Parser.lexer.selectNext();
         let name = new Identifier(temp)
         if (Parser.lexer.next.type == "ASSIGN"){
@@ -317,6 +373,25 @@ class Parser{
         let exp = Parser.parseBoolExpression();
         let block = Parser.parseBlock();
         resultado = new While(exp,block);
+      }// VAR
+      else if (Parser.lexer.next.type == "VAR"){
+        Parser.lexer.selectNext();
+        if (Parser.lexer.next.type != "IDEN"){
+          throw new Error("[Parser] Expected identifier after var")
+        }
+        let nome = Parser.lexer.next.value as string;
+        Parser.lexer.selectNext();
+        if (Parser.lexer.next.type != "TYPE"){
+          throw new Error("[Parser] Expected type after identifier")
+        }
+        let tipo = Parser.lexer.next.value as string;
+        Parser.lexer.selectNext();
+        if (Parser.lexer.next.type == "ASSIGN"){
+          Parser.lexer.selectNext();
+          resultado = new VarDec(nome, tipo, Parser.parseBoolExpression());
+        }else {
+          resultado = new VarDec(nome, tipo);
+        }
       }
       // BLOCO SOLTO
       else if (Parser.lexer.next.type == "OPEN_BRA"){
@@ -383,9 +458,9 @@ class Parser{
 
 class Token {
   type: string;
-  value: number | string;
+  value: number | string | boolean;
 
-  constructor(type: string, value: number | string) {
+  constructor(type: string, value: number | string | boolean) {
     this.type = type;
     this.value = value;
   }
@@ -395,29 +470,30 @@ class Token {
 
 
 abstract class Node {
-  value: number | string;
+  value: number | string | boolean;
   children: Node[];
-  abstract evaluate(st: SymbolTable): number | void;
-  constructor(value: number | string,children: Node[]) {
+  abstract evaluate(st: SymbolTable): number | string | boolean | void;
+  constructor(value: number | string | boolean,children: Node[]) {
     this.value = value;
     this.children = children;
   }
 }
 class Variable{
-  value: number;
-  constructor(value:number){
+  value: number | string | boolean;
+  type: string;
+  constructor(value: number | string | boolean, type: string){
     this.value = value;
+    this.type = type;
   }
 }
-
 
 
 class Identifier extends Node {
   constructor(value:string){
     super(value,[])
   }
-  evaluate(st: SymbolTable): number {
-    return Number(st.buscar(this.value));
+  evaluate(st: SymbolTable): number | string | boolean {
+    return st.buscar(this.value as string);
   }
 }
 
@@ -429,7 +505,7 @@ class Block extends Node{
   constructor(filhos: Node[]){
     super("",filhos)
   }
-  evaluate(st: SymbolTable): number | void {
+  evaluate(st: SymbolTable): void {
     for(let i = 0; i < this.children.length;i++){
       this.children[i]?.evaluate(st)
     }
@@ -445,9 +521,28 @@ class Assignment extends Node{
   constructor(variavel:Node,value:Node){
     super("",[variavel,value])
   }
-  evaluate(st: SymbolTable): number | void {
+  evaluate(st: SymbolTable): void {
     let exp = this.children[1]?.evaluate(st);
-    st.guardar(this.children[0]?.value,exp)
+    tipoDe(exp); // erro [Semantic] se a expressao nao tem valor
+    st.guardar(this.children[0]?.value as string, exp as Valor)
+  }
+}
+
+
+// var x int   |   var x int = expressao
+class VarDec extends Node{
+  tipo: string;
+  constructor(nome: string, tipo: string, inicial?: Node){
+    super(nome, inicial ? [inicial] : []);
+    this.tipo = tipo;
+  }
+  evaluate(st: SymbolTable): void {
+    let inicial = this.children[0]?.evaluate(st);
+    st.create_variable(this.value as string, this.tipo);
+    if (this.children[0]){
+      tipoDe(inicial);
+      st.guardar(this.value as string, inicial as Valor);
+    }
   }
 }
 
@@ -457,7 +552,7 @@ class NoOp extends Node{
   constructor(){
     super("",[])
   }
-  evaluate(st: SymbolTable): number | void {
+  evaluate(st: SymbolTable): void {
     
   }
 }
@@ -471,14 +566,14 @@ class Read extends Node {
         super("", [])
     }
 
-    evaluate(st: SymbolTable): number | void {
+    evaluate(st: SymbolTable): number {
       if (Read.linhas == null){
         let texto = fs.readFileSync(0, 'utf-8');
         Read.linhas = texto.split('\n');
         Read.indice = 0;
         
       }
-      let input = Read.linhas[Read.indice];
+      let input = Read.linhas![Read.indice];
       Read.indice += 1;
       return Number(input);
         
@@ -490,7 +585,9 @@ class Print extends Node{
     super("",[value])
   }
   evaluate(st: SymbolTable): void {
-    console.log(this.children[0]?.evaluate(st))
+    let v = this.children[0]?.evaluate(st);
+    tipoDe(v); // erro [Semantic] se nao tem valor
+    console.log(v)
   }
 }
 
@@ -506,14 +603,33 @@ class SymbolTable{
     set table(valor:Record<string, Variable>) {
       this._table = valor
     }
-    guardar(nome: string, value: number): void{
-      this._table[nome] = new Variable(value);
-    }
-    buscar(nome:string): number{
+    // declarar: var x tipo
+    create_variable(nome: string, type: string){
       if (nome in this._table){
-        return this._table[nome]?.value
+        throw new Error("[Semantic] variable already declared")
       }
-      throw new Error("[Semantic] varible not denfined")
+      let inicial: number | string | boolean = 0;
+      if (type == "string") inicial = "";
+      if (type == "bool") inicial = false;
+      this._table[nome] = new Variable(inicial, type);
+    }
+    // atribuir: x = valor (a variavel precisa ter sido declarada e o tipo tem que bater)
+    guardar(nome: string, value: number | string | boolean): void{
+      let variable = this._table[nome];
+      if (variable === undefined){
+        throw new Error("[Semantic] variable not defined");
+      }
+      if (tipoDe(value) != variable.type){
+        throw new Error("[Semantic] cannot assign " + tipoDe(value) + " to " + variable.type + " variable " + nome);
+      }
+      variable.value = value;
+    }
+    buscar(nome: string): number | string | boolean{
+      let variable = this._table[nome];
+      if (variable === undefined){
+        throw new Error("[Semantic] variable not defined");
+      }
+      return variable.value;
     }
 }
 
@@ -528,25 +644,39 @@ class IntVal extends Node {
     }
 }
 
+class BoolVal extends Node {
+    constructor(value:boolean){
+      super(value,[])
+    }
+    evaluate(st:SymbolTable): boolean{
+      return this.value as boolean;
+    }
+}
 
+
+class StringVal extends Node {
+    constructor(value:string){
+      super(value,[])
+    }
+    evaluate(st:SymbolTable): string{
+      return String(this.value);
+    }
+}
 
 
 class UnOp extends Node{
   constructor(value:string,filho: Node){
     super(value,[filho]);
   }
-  evaluate(st:SymbolTable): number {
+  evaluate(st:SymbolTable): number | boolean {
       let valorDoFilho = this.children[0]?.evaluate(st);
    
       if (this.value == "-") {
-          return -valorDoFilho;
+          return -(exigir(valorDoFilho, "int") as number);
       } else if (this.value == "+"){
-          return valorDoFilho;
+          return exigir(valorDoFilho, "int") as number;
       }else if (this.value == "!"){
-          if (valorDoFilho != 0){
-            return 0;
-          }
-          return 1;
+          return !(exigir(valorDoFilho, "bool") as boolean);
       } 
       else {
           throw new Error("[Semantic] Invalid Symbol " + this.value);
@@ -558,11 +688,11 @@ class If extends Node{
   constructor(value:Node, c1:Node,c2?:Node){
     super("",c2 ? [value,c1,c2] : [value,c1])
   }
-  evaluate(st: SymbolTable): number | void {
-    let condition = this.children[0]?.evaluate(st);
-    if (condition != 0){
+  evaluate(st: SymbolTable): void {
+    let condition = exigir(this.children[0]?.evaluate(st), "bool");
+    if (condition){
       this.children[1]?.evaluate(st);
-    }else if (condition == 0 && this.children[2]){
+    }else if (this.children[2]){
       this.children[2]?.evaluate(st);
     }
   }
@@ -573,11 +703,11 @@ class While extends Node{
   constructor(value:Node,op:Node){
     super("",[value,op])
   }
-  evaluate(st: SymbolTable): number | void {
-    let condition = this.children[0]?.evaluate(st);
-    while (condition != 0){
+  evaluate(st: SymbolTable): void {
+    let condition = exigir(this.children[0]?.evaluate(st), "bool");
+    while (condition){
       this.children[1]?.evaluate(st);
-      condition = this.children[0]?.evaluate(st);
+      condition = exigir(this.children[0]?.evaluate(st), "bool");
     }
   }
 }
@@ -586,45 +716,42 @@ class BinOp extends Node{
   constructor(value:string,n1:Node,n2:Node){
     super(value,[n1,n2])
   }
-  evaluate(st:SymbolTable): number {
+  evaluate(st:SymbolTable): number | string | boolean {
     let p = this.children[0]?.evaluate(st);
     let j = this.children[1]?.evaluate(st);
     let op = this.value;
     if (op == "+"){
-      return p + j;
+      if (tipoDe(p) == "string" && tipoDe(j) == "string"){
+        return (p as string) + (j as string);
+      }
+      return (exigir(p, "int") as number) + (exigir(j, "int") as number);
     }else if (op == "-"){
-      return p - j;
+      return (exigir(p, "int") as number) - (exigir(j, "int") as number);
     }else if (op == "*"){
-      return p * j;
+      return (exigir(p, "int") as number) * (exigir(j, "int") as number);
     }else if (op == "&&"){
-      if (p && j){
-        return 1;
-      }
-      return 0;
+      return (exigir(p, "bool") as boolean) && (exigir(j, "bool") as boolean);
     }else if (op =="||"){
-      if (p || j){
-        return 1;
-      }
-      return 0;
+      return (exigir(p, "bool") as boolean) || (exigir(j, "bool") as boolean);
     }else if (op == "=="){
-      if (p == j){
-        return 1;
+      if (tipoDe(p) != tipoDe(j)){
+        throw new Error("[Semantic] cannot compare " + tipoDe(p) + " with " + tipoDe(j));
       }
-      return 0;
-    }else if (op == ">"){
-      if (p > j){
-        return 1;
+      return p === j;
+    }else if (op == ">" || op == "<"){
+      if (tipoDe(p) != tipoDe(j) || tipoDe(p) == "bool"){
+        throw new Error("[Semantic] cannot order " + tipoDe(p) + " and " + tipoDe(j));
       }
-      return 0;
-    }else if ( op == "<"){
-      if (p < j){
-        return 1;
+      if (typeof p === "number" && typeof j === "number"){
+        return op == ">" ? p > j : p < j;
       }
-      return 0;
+      return op == ">" ? (p as string) > (j as string) : (p as string) < (j as string);
     }
     else if (op == "/"){
-      if (j == 0) throw new Error("[Semantic] Division by zero");
-      return Math.trunc(p/j); 
+      let a = exigir(p, "int") as number;
+      let b = exigir(j, "int") as number;
+      if (b == 0) throw new Error("[Semantic] Division by zero");
+      return Math.trunc(a/b); 
     }
     throw new Error("[Semantic] Invalid Symbol " + this.value)
   }
@@ -645,7 +772,7 @@ function main(nomeArquivo: string): number|void|string{
     let codigoLimpo = Prepro.filter(conteudo);
     let resultado = Parser.run(codigoLimpo);
     let st = new SymbolTable()
-    return resultado.evaluate(st);
+    return resultado.evaluate(st) as void;
 }
 
 main(process.argv[2])
