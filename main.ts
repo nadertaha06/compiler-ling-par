@@ -1,9 +1,24 @@
 const fs = require('fs');
 
-type Valor = number | string | boolean;
+// float precisa de classe propria: no JS 2 e 2.0 sao o mesmo number
+class Flt {
+  v: number;
+  constructor(v: number){ this.v = v; }
+  toString(): string { return String(this.v); }
+}
 
-// "int" | "string" | "bool" a partir do valor que o JS guarda
+type Valor = number | string | boolean | Flt;
+
+// int ou float -> numero do JS (erro se for outro tipo)
+function numerico(v: Valor | void | undefined): number {
+  if (typeof v === "number") return v;
+  if (v instanceof Flt) return v.v;
+  throw new Error("[Semantic] expected int or float but got " + tipoDe(v));
+}
+
+// "int" | "float" | "string" | "bool" a partir do valor que o JS guarda
 function tipoDe(v: Valor | void | undefined): string {
+  if (v instanceof Flt) return "float";
   if (typeof v === "number") return "int";
   if (typeof v === "string") return "string";
   if (typeof v === "boolean") return "bool";
@@ -164,7 +179,7 @@ class Lexer {
               this.next = new Token("BOOL",false)
           }else if (word == "string"){
               this.next = new Token("TYPE",word)
-          }else if (word == "int"){
+          }else if (word == "int" || word == "float"){
               this.next = new Token("TYPE",word)
           }else if (word == "bool"){
               this.next = new Token("TYPE",word);
@@ -179,6 +194,18 @@ class Lexer {
         while ( this.position < this.source.length && (this.source[this.position] >= "0" && this.source[this.position] <= "9" )){
           sum += this.source[this.position];
           this.position += 1;
+        }
+        // 1.6 -> FLOAT (so conta o ponto se tiver digito depois dele)
+        let d = this.source[this.position + 1];
+        if (this.source[this.position] == "." && d !== undefined && d >= "0" && d <= "9"){
+          sum += ".";
+          this.position += 1;
+          while ( this.position < this.source.length && (this.source[this.position] >= "0" && this.source[this.position] <= "9" )){
+            sum += this.source[this.position];
+            this.position += 1;
+          }
+          this.next = new Token("FLOAT",Number(sum))
+          return;
         }
         this.next = new Token("INT",Number(sum))
         return;
@@ -273,8 +300,20 @@ class Parser{
         let t = Number(Parser.lexer.next.value);
         Parser.lexer.selectNext();
         resultado = new IntVal(t);
+    }else if (Parser.lexer.next.type == "FLOAT"){
+        let t = Number(Parser.lexer.next.value);
+        Parser.lexer.selectNext();
+        resultado = new FloatVal(t);
     }else if (Parser.lexer.next.type == "OPEN_PAR"){
         Parser.lexer.selectNext();
+        // casting: ( TYPE ) FACTOR  -- TYPE logo depois do "(" nunca e expressao
+        if (Parser.lexer.next.type == "TYPE"){
+          let tipo = Parser.lexer.next.value as string;
+          Parser.lexer.selectNext();
+          if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
+          Parser.lexer.selectNext();
+          return new Cast(tipo, Parser.parseFactor());
+        }
         resultado = Parser.parseBoolExpression();
         if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
         Parser.lexer.selectNext();
@@ -472,16 +511,16 @@ class Token {
 abstract class Node {
   value: number | string | boolean;
   children: Node[];
-  abstract evaluate(st: SymbolTable): number | string | boolean | void;
+  abstract evaluate(st: SymbolTable): Valor | void;
   constructor(value: number | string | boolean,children: Node[]) {
     this.value = value;
     this.children = children;
   }
 }
 class Variable{
-  value: number | string | boolean;
+  value: Valor;
   type: string;
-  constructor(value: number | string | boolean, type: string){
+  constructor(value: Valor, type: string){
     this.value = value;
     this.type = type;
   }
@@ -492,7 +531,7 @@ class Identifier extends Node {
   constructor(value:string){
     super(value,[])
   }
-  evaluate(st: SymbolTable): number | string | boolean {
+  evaluate(st: SymbolTable): Valor {
     return st.buscar(this.value as string);
   }
 }
@@ -587,7 +626,7 @@ class Print extends Node{
   evaluate(st: SymbolTable): void {
     let v = this.children[0]?.evaluate(st);
     tipoDe(v); // erro [Semantic] se nao tem valor
-    console.log(v)
+    console.log(String(v))
   }
 }
 
@@ -608,23 +647,28 @@ class SymbolTable{
       if (nome in this._table){
         throw new Error("[Semantic] variable already declared")
       }
-      let inicial: number | string | boolean = 0;
+      let inicial: Valor = 0;
+      if (type == "float") inicial = new Flt(0);
       if (type == "string") inicial = "";
       if (type == "bool") inicial = false;
       this._table[nome] = new Variable(inicial, type);
     }
     // atribuir: x = valor (a variavel precisa ter sido declarada e o tipo tem que bater)
-    guardar(nome: string, value: number | string | boolean): void{
+    guardar(nome: string, value: Valor): void{
       let variable = this._table[nome];
       if (variable === undefined){
         throw new Error("[Semantic] variable not defined");
+      }
+      // int cabe em float (alarga); float NAO cabe em int sem casting
+      if (variable.type == "float" && tipoDe(value) == "int"){
+        value = new Flt(value as number);
       }
       if (tipoDe(value) != variable.type){
         throw new Error("[Semantic] cannot assign " + tipoDe(value) + " to " + variable.type + " variable " + nome);
       }
       variable.value = value;
     }
-    buscar(nome: string): number | string | boolean{
+    buscar(nome: string): Valor{
       let variable = this._table[nome];
       if (variable === undefined){
         throw new Error("[Semantic] variable not defined");
@@ -641,6 +685,50 @@ class IntVal extends Node {
     }
     evaluate(st:SymbolTable): number{
       return Number(this.value);
+    }
+}
+
+class FloatVal extends Node {
+    constructor(value:number){
+      super(value,[])
+    }
+    evaluate(st:SymbolTable): Flt{
+      return new Flt(Number(this.value));
+    }
+}
+
+// (int) x   (float) x   (string) x   (bool) x
+class Cast extends Node {
+    constructor(tipo:string, filho:Node){
+      super(tipo,[filho])
+    }
+    evaluate(st:SymbolTable): Valor{
+      let v = this.children[0]?.evaluate(st);
+      let de = tipoDe(v);
+      let para = this.value as string;
+      if (de == para) return v as Valor;
+      if (para == "string") return String(v);
+      if (para == "int"){
+        if (de == "float") return Math.round((v as Flt).v);
+        if (de == "string"){
+          let n = Number(v);
+          if (v === "" || !Number.isInteger(n)) throw new Error("[Semantic] cannot cast string to int");
+          return n;
+        }
+      }
+      if (para == "float"){
+        if (de == "int") return new Flt(v as number);
+        if (de == "string"){
+          let n = Number(v);
+          if (v === "" || isNaN(n)) throw new Error("[Semantic] cannot cast string to float");
+          return new Flt(n);
+        }
+      }
+      if (para == "bool"){
+        if (de == "int" || de == "float") return numerico(v) != 0;
+        if (de == "string" && (v == "true" || v == "false")) return v == "true";
+      }
+      throw new Error("[Semantic] cannot cast " + de + " to " + para);
     }
 }
 
@@ -668,13 +756,15 @@ class UnOp extends Node{
   constructor(value:string,filho: Node){
     super(value,[filho]);
   }
-  evaluate(st:SymbolTable): number | boolean {
+  evaluate(st:SymbolTable): Valor {
       let valorDoFilho = this.children[0]?.evaluate(st);
-   
+
       if (this.value == "-") {
-          return -(exigir(valorDoFilho, "int") as number);
+          let r = -numerico(valorDoFilho);
+          return tipoDe(valorDoFilho) == "float" ? new Flt(r) : r;
       } else if (this.value == "+"){
-          return exigir(valorDoFilho, "int") as number;
+          numerico(valorDoFilho);
+          return valorDoFilho as Valor;
       }else if (this.value == "!"){
           return !(exigir(valorDoFilho, "bool") as boolean);
       } 
@@ -716,42 +806,49 @@ class BinOp extends Node{
   constructor(value:string,n1:Node,n2:Node){
     super(value,[n1,n2])
   }
-  evaluate(st:SymbolTable): number | string | boolean {
+  evaluate(st:SymbolTable): Valor {
     let p = this.children[0]?.evaluate(st);
     let j = this.children[1]?.evaluate(st);
     let op = this.value;
+    let tp = tipoDe(p);
+    let tj = tipoDe(j);
+    let ehNum = (t: string) => t == "int" || t == "float";
+    // resultado e float se qualquer lado for float
+    let comTipo = (r: number): Valor => (tp == "float" || tj == "float") ? new Flt(r) : r;
+
     if (op == "+"){
-      if (tipoDe(p) == "string" || tipoDe(j) == "string"){
+      if (tp == "string" || tj == "string"){
         return String(p) + String(j);
       }
-      return (exigir(p, "int") as number) + (exigir(j, "int") as number);
+      return comTipo(numerico(p) + numerico(j));
     }else if (op == "-"){
-      return (exigir(p, "int") as number) - (exigir(j, "int") as number);
+      return comTipo(numerico(p) - numerico(j));
     }else if (op == "*"){
-      return (exigir(p, "int") as number) * (exigir(j, "int") as number);
+      return comTipo(numerico(p) * numerico(j));
+    }else if (op == "/"){
+      let a = numerico(p);
+      let b = numerico(j);
+      if (b == 0) throw new Error("[Semantic] Division by zero");
+      if (tp == "float" || tj == "float") return new Flt(a / b);
+      return Math.trunc(a / b);
     }else if (op == "&&"){
       return (exigir(p, "bool") as boolean) && (exigir(j, "bool") as boolean);
     }else if (op =="||"){
       return (exigir(p, "bool") as boolean) || (exigir(j, "bool") as boolean);
     }else if (op == "=="){
-      if (tipoDe(p) != tipoDe(j)){
-        throw new Error("[Semantic] cannot compare " + tipoDe(p) + " with " + tipoDe(j));
+      if (ehNum(tp) && ehNum(tj)) return numerico(p) === numerico(j);
+      if (tp != tj){
+        throw new Error("[Semantic] cannot compare " + tp + " with " + tj);
       }
       return p === j;
     }else if (op == ">" || op == "<"){
-      if (tipoDe(p) != tipoDe(j) || tipoDe(p) == "bool"){
-        throw new Error("[Semantic] cannot order " + tipoDe(p) + " and " + tipoDe(j));
+      if (ehNum(tp) && ehNum(tj)){
+        return op == ">" ? numerico(p) > numerico(j) : numerico(p) < numerico(j);
       }
-      if (typeof p === "number" && typeof j === "number"){
-        return op == ">" ? p > j : p < j;
+      if (tp != tj || tp == "bool"){
+        throw new Error("[Semantic] cannot order " + tp + " and " + tj);
       }
       return op == ">" ? (p as string) > (j as string) : (p as string) < (j as string);
-    }
-    else if (op == "/"){
-      let a = exigir(p, "int") as number;
-      let b = exigir(j, "int") as number;
-      if (b == 0) throw new Error("[Semantic] Division by zero");
-      return Math.trunc(a/b); 
     }
     throw new Error("[Semantic] Invalid Symbol " + this.value)
   }
