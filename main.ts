@@ -106,6 +106,11 @@ class Lexer {
         this.position += 1;
         return;
       }
+      if (c == ","){
+        this.next = new Token("COMMA",",");
+        this.position += 1;
+        return;
+      }
       if (c == "&"){
         this.position += 1;
         if (this.source[this.position] == "&"){
@@ -171,6 +176,10 @@ class Lexer {
           }
           else if (word == "var"){
               this.next = new Token("VAR",word);
+          }else if (word == "func"){
+              this.next = new Token("FUNC",word);
+          }else if (word == "return"){
+              this.next = new Token("RETURN",word);
           }else if (word == "true"){
               this.next = new Token("BOOL",true);
           }else if (word == "false"){
@@ -300,7 +309,12 @@ class Parser{
     }else if (Parser.lexer.next.type == "IDEN"){
         let temp = Parser.lexer.next.value as string;
         Parser.lexer.selectNext();
-        resultado = new Identifier(temp)
+        // soma(1, 2) dentro de expressao: chamada de funcao
+        if (Parser.lexer.next.type == "OPEN_PAR"){
+          resultado = new FuncCall(temp, Parser.parseArgs(), true);
+        }else {
+          resultado = new Identifier(temp)
+        }
     }else if (Parser.lexer.next.type == "NOT"){
         Parser.lexer.selectNext();
         resultado = new UnOp('!',Parser.parseFactor());
@@ -350,9 +364,15 @@ class Parser{
         if (Parser.lexer.next.type == "ASSIGN"){
           Parser.lexer.selectNext();
           resultado = new Assignment(name , Parser.parseBoolExpression())
+        }else if (Parser.lexer.next.type == "OPEN_PAR"){
+          resultado = new FuncCall(temp, Parser.parseArgs(), false);
         }else {
-          throw new Error("[Parser] Expected '=' after identifier")
+          throw new Error("[Parser] Expected '=' or '(' after identifier")
         }
+      }// return
+      else if (Parser.lexer.next.type == "RETURN"){
+        Parser.lexer.selectNext();
+        resultado = new Return(Parser.parseBoolExpression());
       }// Print
       else if (Parser.lexer.next.type == "PRINT"){
         Parser.lexer.selectNext(); 
@@ -448,12 +468,87 @@ class Parser{
   }
 
 
-  //Leitura do programa linha a linha 
+  // argumentos de uma chamada: ( [ BOOLEXPRESSION { , BOOLEXPRESSION } ] )
+  static parseArgs(): Node[]{
+    const args: Node[] = [];
+    Parser.lexer.selectNext(); // (
+    if (Parser.lexer.next.type != "CLOSE_PAR"){
+      args.push(Parser.parseBoolExpression());
+      while (Parser.lexer.next.type == "COMMA"){
+        Parser.lexer.selectNext();
+        args.push(Parser.parseBoolExpression());
+      }
+    }
+    if (Parser.lexer.next.type != "CLOSE_PAR"){
+      throw new Error("[Parser] Expected ')' after arguments");
+    }
+    Parser.lexer.selectNext();
+    return args;
+  }
+
+  // parametro da funcao: IDENTIFIER TYPE (vira um VarDec sem valor inicial)
+  static parseParam(): VarDec{
+    if (Parser.lexer.next.type != "IDEN"){
+      throw new Error("[Parser] Expected parameter name");
+    }
+    let nome = Parser.lexer.next.value as string;
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "TYPE"){
+      throw new Error("[Parser] Expected type after parameter " + nome);
+    }
+    let tipo = Parser.lexer.next.value as string;
+    Parser.lexer.selectNext();
+    return new VarDec(nome, tipo);
+  }
+
+  // func nome ( [ IDENTIFIER TYPE { , IDENTIFIER TYPE } ] ) [ TYPE ] BLOCK
+  static parseFuncDeclaration(): FuncDec{
+    Parser.lexer.selectNext(); // func
+    if (Parser.lexer.next.type != "IDEN"){
+      throw new Error("[Parser] Expected function name after func");
+    }
+    let nome = new Identifier(Parser.lexer.next.value as string);
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "OPEN_PAR"){
+      throw new Error("[Parser] Expected '(' after function name");
+    }
+    Parser.lexer.selectNext();
+    const params: VarDec[] = [];
+    if (Parser.lexer.next.type != "CLOSE_PAR"){
+      params.push(Parser.parseParam());
+      while (Parser.lexer.next.type == "COMMA"){
+        Parser.lexer.selectNext();
+        params.push(Parser.parseParam());
+      }
+    }
+    if (Parser.lexer.next.type != "CLOSE_PAR"){
+      throw new Error("[Parser] Expected ')' after parameters");
+    }
+    Parser.lexer.selectNext();
+    // sem tipo de retorno: funcao "void", que nao pode dar return
+    let tipo = "void";
+    if (Parser.lexer.next.type == "TYPE"){
+      tipo = Parser.lexer.next.value as string;
+      Parser.lexer.selectNext();
+    }
+    return new FuncDec(tipo, nome, params, Parser.parseBlock());
+  }
+
+  //Leitura do programa linha a linha
+  // v2.3: no topo ficam as funcoes e as variaveis globais. Comandos soltos no topo
+  // continuam aceitos para os programas dos roteiros anteriores rodarem
   static parseProgram(): Block{
-    const lines: Node[] = []; 
+    const lines: Node[] = [];
     while (Parser.lexer.next.type != "EOF"){
-      let line = Parser.parseStatement();
-      lines.push(line);
+      if (Parser.lexer.next.type == "FUNC"){
+        lines.push(Parser.parseFuncDeclaration());
+        if (Parser.lexer.next.type != "END"){
+          throw new Error("[Parser] Expected end of line")
+        }
+        Parser.lexer.selectNext();
+      }else {
+        lines.push(Parser.parseStatement());
+      }
     }
     return new Block(lines)
   }
@@ -466,6 +561,11 @@ class Parser{
     const resultado = Parser.parseProgram();
     if (Parser.lexer.next.type != "EOF"){
       throw new Error("[Parser] Unexpected token");
+    }
+    // programa com funcoes comeca pela main (obrigatoria): a chamada vai no fim da raiz.
+    // Programa so de comandos (roteiros anteriores) nao tem main e roda direto
+    if (resultado.children.some(filho => filho instanceof FuncDec)){
+      resultado.children.push(new FuncCall("main", [], false));
     }
     return resultado;
 
@@ -495,6 +595,12 @@ class Code {
     Code.instructions.push(code);
   }
 
+  // coloca uma instrucao numa posicao ja passada (ex: reservar as locais de uma
+  // funcao, que so se conhece depois de gerar o corpo dela)
+  static insert(pos: number, code: string): void {
+    Code.instructions.splice(pos, 0, code);
+  }
+
   // frame: bytes que as variaveis ocupam na pilha, reservados de uma vez no inicio.
   // Um "sub esp, 4" por declaracao quebraria com var dentro de if nao executado:
   // o ESP ficaria acima da variavel e os push/pop sobrescreveriam o valor dela.
@@ -503,6 +609,7 @@ class Code {
   format_out: db "%d", 10, 0 ; format do printf
   format_in: db "%d", 0 ; format do scanf
   scan_int: dd 0; 32-bits integer
+  ebp_global: dd 0 ; EBP do programa principal: base das globais dentro das funcoes
 
 section .text
   extern printf
@@ -513,6 +620,7 @@ section .text
 _start:
   push ebp ; guarda o EBP
   mov ebp, esp ; zera a pilha
+  mov [ebp_global], ebp
 
   ; aqui começa o codigo gerado:
 `;
@@ -559,13 +667,15 @@ abstract class Node {
   }
 }
 class Variable{
-  value: number | string | boolean;
-  type: string;
-  shift: number; // a variavel mora em [EBP-shift]
-  constructor(value: number | string | boolean, type: string, shift: number){
+  value: number | string | boolean | FuncDec; // funcao guarda o proprio FuncDec
+  type: string; // na funcao, e o tipo de retorno
+  shift: number; // a variavel mora em [EBP-shift]; argumento tem shift negativo: [EBP+N]
+  funcao: boolean;
+  constructor(value: number | string | boolean | FuncDec, type: string, shift: number, funcao: boolean = false){
     this.value = value;
     this.type = type;
     this.shift = shift;
+    this.funcao = funcao;
   }
 }
 
@@ -578,8 +688,9 @@ class Identifier extends Node {
     return st.buscar(this.value as string);
   }
   generate(st: SymbolTable): string {
-    let variable = st.obter(this.value as string);
-    Code.append("mov eax, [ebp-" + variable.shift + "] ; recupera " + this.value);
+    let variable = st.variavel(this.value as string);
+    let endereco = st.endereco(this.value as string);
+    Code.append("mov eax, " + endereco + " ; recupera " + this.value);
     return variable.type;
   }
 }
@@ -592,14 +703,26 @@ class Block extends Node{
   constructor(filhos: Node[]){
     super("",filhos)
   }
-  evaluate(st: SymbolTable): void {
+  // bloco dentro de bloco ganha escopo proprio, encadeado no atual
+  static escopo(filho: Node | undefined, st: SymbolTable): SymbolTable {
+    return filho instanceof Block ? new SymbolTable(st) : st;
+  }
+  // devolve o valor do return, que para o bloco. O return pode vir direto ou de
+  // dentro de um if/for/bloco interno (que devolvem o valor para cima)
+  evaluate(st: SymbolTable): Valor | void {
     for(let i = 0; i < this.children.length;i++){
-      this.children[i]?.evaluate(st)
+      let filho = this.children[i];
+      let r = filho?.evaluate(Block.escopo(filho, st));
+      let repassa = filho instanceof Block || filho instanceof If || filho instanceof While;
+      if (filho instanceof Return || (repassa && r !== undefined)){
+        return r;
+      }
     }
   }
   generate(st: SymbolTable): void {
     for(let i = 0; i < this.children.length;i++){
-      this.children[i]?.generate(st)
+      let filho = this.children[i];
+      filho?.generate(Block.escopo(filho, st))
     }
   }
 }
@@ -621,9 +744,10 @@ class Assignment extends Node{
   generate(st: SymbolTable): void {
     let tipo = this.children[1]?.generate(st);
     let nome = this.children[0]?.value as string;
-    let variable = st.obter(nome);
+    let variable = st.variavel(nome);
     exigirTipo(tipo, variable.type);
-    Code.append("mov [ebp-" + variable.shift + "], eax ; " + nome + " = ...");
+    let endereco = st.endereco(nome);
+    Code.append("mov " + endereco + ", eax ; " + nome + " = ...");
   }
 }
 
@@ -723,12 +847,17 @@ class Print extends Node{
 }
 
 
+// lista ligada reversa: cada tabela aponta para o escopo de fora (parent)
 class SymbolTable{
     private _table: Record<string, Variable>;
-    private _shift: number; // deslocamento da ultima variavel declarada
-    constructor(){
+    private _shift: number; // bytes ja reservados na pilha deste frame
+    parent: SymbolTable | null; // null na tabela global
+    funcao: FuncDec | null; // preenchido na tabela de uma funcao
+    constructor(parent: SymbolTable | null = null, funcao: FuncDec | null = null){
       this._table = {};
       this._shift = 0;
+      this.parent = parent;
+      this.funcao = funcao;
     }
     get table(): Record<string, Variable>{
       return this._table
@@ -740,37 +869,95 @@ class SymbolTable{
     get shift(): number{
       return this._shift
     }
-    // declarar: var x tipo (cada variavel ganha 4 bytes: [EBP-4], [EBP-8], ...)
-    create_variable(nome: string, type: string): Variable{
-      if (nome in this._table){
+    // tabela global: onde ficam as funcoes e as variaveis globais
+    raiz(): SymbolTable{
+      return this.parent ? this.parent.raiz() : this;
+    }
+    // dona da pilha: a tabela da funcao, ou a global. As variaveis dos blocos internos
+    // ficam no frame dela, cada uma com seu proprio deslocamento
+    frame(): SymbolTable{
+      return this.funcao || !this.parent ? this : this.parent.frame();
+    }
+    // declarar: var x tipo (cada variavel ganha 4 bytes: [EBP-4], [EBP-8], ...).
+    // O shift so vem pronto para os argumentos de funcao ([EBP+8], [EBP+12], ...)
+    create_variable(nome: string, type: string, shift?: number): Variable{
+      if (Object.hasOwn(this._table, nome)){
         throw new Error("[Semantic] variable already declared")
       }
       let inicial: number | string | boolean = 0;
       if (type == "string") inicial = "";
       if (type == "bool") inicial = false;
-      this._shift += 4;
-      let variable = new Variable(inicial, type, this._shift);
+      if (shift === undefined){
+        let frame = this.frame();
+        frame._shift += 4;
+        shift = frame._shift;
+      }
+      let variable = new Variable(inicial, type, shift);
       this._table[nome] = variable;
       return variable;
     }
+    // func: uma "variavel" que guarda o proprio FuncDec e o tipo de retorno
+    create_function(funcao: FuncDec): void{
+      let nome = funcao.nome();
+      if (Object.hasOwn(this._table, nome)){
+        throw new Error("[Semantic] " + nome + " already declared");
+      }
+      this._table[nome] = new Variable(funcao, funcao.value as string, 0, true);
+    }
+    // tabela onde o nome foi declarado: procura aqui e vai subindo pelos escopos
+    private dona(nome: string): SymbolTable | undefined{
+      if (Object.hasOwn(this._table, nome)) return this;
+      return this.parent ? this.parent.dona(nome) : undefined;
+    }
+    obter(nome: string): Variable{
+      let dona = this.dona(nome);
+      if (dona === undefined){
+        throw new Error("[Semantic] variable not defined");
+      }
+      return dona._table[nome] as Variable;
+    }
+    // so variavel de verdade, nao funcao
+    variavel(nome: string): Variable{
+      let variable = this.obter(nome);
+      if (variable.funcao){
+        throw new Error("[Semantic] " + nome + " is a function, not a variable");
+      }
+      return variable;
+    }
+    buscarFuncao(nome: string): FuncDec{
+      let dona = this.dona(nome);
+      if (dona === undefined){
+        throw new Error("[Semantic] function " + nome + " not defined");
+      }
+      let variable = dona._table[nome] as Variable;
+      if (!variable.funcao){
+        throw new Error("[Semantic] " + nome + " is not a function");
+      }
+      return variable.value as FuncDec;
+    }
     // atribuir: x = valor (a variavel precisa ter sido declarada e o tipo tem que bater)
     guardar(nome: string, value: number | string | boolean): void{
-      let variable = this.obter(nome);
+      let variable = this.variavel(nome);
       if (tipoDe(value) != variable.type){
         throw new Error("[Semantic] cannot assign " + tipoDe(value) + " to " + variable.type + " variable " + nome);
       }
       variable.value = value;
     }
     buscar(nome: string): number | string | boolean{
-      return this.obter(nome).value;
+      return this.variavel(nome).value as Valor;
     }
-    // a variavel inteira (tipo e deslocamento), usada no generate()
-    obter(nome: string): Variable{
-      let variable = this._table[nome];
-      if (variable === undefined){
-        throw new Error("[Semantic] variable not defined");
+    // operando de memoria da variavel no assembly: [EBP-N] local, [EBP+N] argumento.
+    // Global usada dentro de funcao: ali o EBP e o da funcao, entao a base e o EBP
+    // do programa principal guardado em ebp_global (passando pelo ECX)
+    endereco(nome: string): string{
+      let variable = this.variavel(nome);
+      let dona = this.dona(nome);
+      if (dona === this.raiz() && this.frame() !== dona){
+        Code.append("mov ecx, [ebp_global] ; base das globais");
+        return "[ecx-" + variable.shift + "]";
       }
-      return variable;
+      if (variable.shift < 0) return "[ebp+" + (-variable.shift) + "]";
+      return "[ebp-" + variable.shift + "]";
     }
 }
 
@@ -860,12 +1047,13 @@ class If extends Node{
   constructor(value:Node, c1:Node,c2?:Node){
     super("",c2 ? [value,c1,c2] : [value,c1])
   }
-  evaluate(st: SymbolTable): void {
+  // devolve o valor se o bloco executado deu return
+  evaluate(st: SymbolTable): Valor | void {
     let condition = exigir(this.children[0]?.evaluate(st), "bool");
     if (condition){
-      this.children[1]?.evaluate(st);
+      return this.children[1]?.evaluate(st);
     }else if (this.children[2]){
-      this.children[2]?.evaluate(st);
+      return this.children[2]?.evaluate(st);
     }
   }
   generate(st: SymbolTable): void {
@@ -885,10 +1073,12 @@ class While extends Node{
   constructor(value:Node,op:Node){
     super("",[value,op])
   }
-  evaluate(st: SymbolTable): void {
+  // return dentro do loop sai dele devolvendo o valor
+  evaluate(st: SymbolTable): Valor | void {
     let condition = exigir(this.children[0]?.evaluate(st), "bool");
     while (condition){
-      this.children[1]?.evaluate(st);
+      let r = this.children[1]?.evaluate(st);
+      if (r !== undefined) return r;
       condition = exigir(this.children[0]?.evaluate(st), "bool");
     }
   }
@@ -989,6 +1179,149 @@ class BinOp extends Node{
   }
 }
 
+// func nome(x int, y int) int { ... }
+// filhos: [Identifier, VarDec de cada parametro..., Block]; valor: tipo de retorno ("void" se nao tiver)
+class FuncDec extends Node{
+  // funcoes com o corpo ainda por gerar (ver gerarCorpos)
+  static pendentes: FuncDec[] = [];
+  constructor(tipo: string, nome: Identifier, params: VarDec[], corpo: Block){
+    super(tipo, [nome, ...params, corpo]);
+  }
+  nome(): string{
+    return this.children[0]?.value as string;
+  }
+  params(): VarDec[]{
+    return this.children.slice(1, -1) as VarDec[];
+  }
+  corpo(): Block{
+    return this.children[this.children.length - 1] as Block;
+  }
+  // so registra a funcao; pela sintaxe isso sempre acontece na tabela global
+  evaluate(st: SymbolTable): void {
+    st.create_function(this);
+  }
+  // registra agora e deixa o corpo para o fim (gerarCorpos): assim a main pode chamar
+  // uma funcao declarada abaixo dela e as funcoes enxergam todas as globais
+  generate(st: SymbolTable): void {
+    st.create_function(this);
+    FuncDec.pendentes.push(this);
+  }
+  // os procedimentos ficam depois do codigo do programa principal
+  static gerarCorpos(st: SymbolTable): void {
+    if (FuncDec.pendentes.length == 0) return;
+    Code.append("jmp fim_funcoes ; as funcoes so rodam quando chamadas");
+    for (const funcao of FuncDec.pendentes){
+      funcao.gerarCorpo(st);
+    }
+    Code.append("fim_funcoes:");
+  }
+  gerarCorpo(st: SymbolTable): void {
+    if (this.value == "string") semStrings();
+    let local = new SymbolTable(st, this);
+    // quem chama empilha da esquerda pra direita, entao o ultimo argumento fica em
+    // [EBP+8] ([EBP] e o EBP de quem chamou e [EBP+4] o endereco de retorno)
+    let params = this.params();
+    params.forEach((p, i) => {
+      if (p.tipo == "string") semStrings();
+      local.create_variable(p.value as string, p.tipo, -(8 + 4 * (params.length - 1 - i)));
+    });
+    Code.append("func_" + this.nome() + ":");
+    Code.append("push ebp ; guarda o EBP de quem chamou");
+    Code.append("mov ebp, esp ; zera a pilha da funcao");
+    let inicio = Code.instructions.length;
+    this.corpo().generate(local);
+    if (local.shift > 0) Code.insert(inicio, "sub esp, " + local.shift + " ; variaveis locais");
+    // chegou ao fim do corpo sem return
+    Code.append("mov esp, ebp ; reestabelece a pilha");
+    Code.append("pop ebp");
+    Code.append("ret");
+  }
+}
+
+
+// nome(args): filhos = as expressoes dos argumentos. expressao: a chamada esta dentro
+// de uma expressao (tem que devolver valor) e nao solta como comando
+class FuncCall extends Node{
+  expressao: boolean;
+  constructor(nome: string, args: Node[], expressao: boolean){
+    super(nome, args);
+    this.expressao = expressao;
+  }
+  // confere a chamada contra a declaracao da funcao
+  declaracao(st: SymbolTable): FuncDec {
+    let nome = this.value as string;
+    let funcao = st.buscarFuncao(nome);
+    if (this.expressao && funcao.value == "void"){
+      throw new Error("[Semantic] function " + nome + " has no return value");
+    }
+    let n = funcao.params().length;
+    if (this.children.length != n){
+      throw new Error("[Semantic] function " + nome + " expects " + n + " arguments but got " + this.children.length);
+    }
+    return funcao;
+  }
+  evaluate(st: SymbolTable): Valor | void {
+    let funcao = this.declaracao(st);
+    // a funcao enxerga as globais, nao as variaveis de quem chamou
+    let local = new SymbolTable(st.raiz(), funcao);
+    // argumento: avalia no escopo de quem chama, declara e preenche no da funcao
+    funcao.params().forEach((p, i) => {
+      let v = this.children[i]?.evaluate(st);
+      p.evaluate(local);
+      local.guardar(p.value as string, v as Valor);
+    });
+    let r = funcao.corpo().evaluate(local);
+    if (r === undefined) return; // void (ou terminou sem return)
+    if (funcao.value == "void"){
+      throw new Error("[Semantic] function " + funcao.nome() + " has no return type and cannot return");
+    }
+    return exigir(r, funcao.value as string);
+  }
+  // argumentos avaliados e empilhados da esquerda pra direita; o retorno vem em EAX
+  generate(st: SymbolTable): string {
+    let funcao = this.declaracao(st);
+    let params = funcao.params();
+    params.forEach((p, i) => {
+      let tipo = this.children[i]?.generate(st);
+      if (tipo != p.tipo){
+        throw new Error("[Semantic] cannot assign " + tipo + " to " + p.tipo + " variable " + p.value);
+      }
+      Code.append("push eax ; argumento " + p.value);
+    });
+    Code.append("call func_" + this.value);
+    if (params.length > 0) Code.append("add esp, " + 4 * params.length + " ; remove os argumentos");
+    return funcao.value as string;
+  }
+}
+
+
+class Return extends Node{
+  constructor(valor: Node){
+    super("", [valor]);
+  }
+  evaluate(st: SymbolTable): Valor {
+    if (!st.frame().funcao){
+      throw new Error("[Semantic] return outside function");
+    }
+    let v = this.children[0]?.evaluate(st);
+    tipoDe(v); // erro [Semantic] se nao tem valor
+    return v as Valor;
+  }
+  generate(st: SymbolTable): void {
+    let funcao = st.frame().funcao;
+    if (!funcao){
+      throw new Error("[Semantic] return outside function");
+    }
+    if (funcao.value == "void"){
+      throw new Error("[Semantic] function " + funcao.nome() + " has no return type and cannot return");
+    }
+    exigirTipo(this.children[0]?.generate(st), funcao.value as string);
+    Code.append("mov esp, ebp ; return: valor em EAX");
+    Code.append("pop ebp");
+    Code.append("ret");
+  }
+}
+
 class Prepro {
     static filter(code: string): string {
         return code.replace(/\/\/[^\n]*/g, '');
@@ -1005,6 +1338,7 @@ function main(nomeArquivo: string): void{
     let resultado = Parser.run(codigoLimpo);
     let st = new SymbolTable()
     resultado.generate(st);
+    FuncDec.gerarCorpos(st);
     // teste.go -> teste.asm (mesma pasta, mesmo prefixo)
     let entrada = path.parse(nomeArquivo);
     Code.dump(path.join(entrada.dir, entrada.name + '.asm'), st.shift);
