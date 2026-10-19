@@ -417,6 +417,11 @@ class Parser{
       }else{
         throw new Error("[Parser] Unexpected token at start of statement")
       }
+      // if, for e bloco terminam em "}" e podem fechar o bloco de fora na mesma linha, ex: {{ }}
+      let composto = resultado instanceof If || resultado instanceof While || resultado instanceof Block;
+      if (composto && Parser.lexer.next.type == "CLOSE_BRA"){
+        return resultado;
+      }
       if (Parser.lexer.next.type != "END"){
         throw new Error("[Parser] Expected end of line")
       }
@@ -429,10 +434,10 @@ class Parser{
     const lines: Node[] = [];
     if(Parser.lexer.next.type == "OPEN_BRA"){
       Parser.lexer.selectNext();
-      if (Parser.lexer.next.type != "END"){
-        throw new Error("[Parser] Expected newline after {");
+      // o "\n" depois do "{" e opcional: o teste do corretor usa {{ }} numa linha so
+      if (Parser.lexer.next.type == "END"){
+        Parser.lexer.selectNext();
       }
-      Parser.lexer.selectNext();
       while (Parser.lexer.next.type != "CLOSE_BRA"){
         let line = Parser.parseStatement();
         lines.push(line);
