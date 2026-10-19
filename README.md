@@ -2,7 +2,7 @@
 
 [![Compilation Status](https://compiler-tester.insper-comp.com.br/svg/nadertaha06/compiler-ling-par)](https://compiler-tester.insper-comp.com.br/svg/nadertaha06/compiler-ling-par)
 
-![Diagrama Sintático](https://compiler-tester.insper-comp.com.br/ds?version=v2.2)
+![Diagrama Sintático](https://compiler-tester.insper-comp.com.br/ds?version=v3.0)
 
 ```ebnf
 PROGRAM = { STATEMENT } ;
