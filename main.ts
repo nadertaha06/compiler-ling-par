@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 
 type Valor = number | string | boolean;
 
@@ -16,6 +17,18 @@ function exigir(v: Valor | void | undefined, tipo: string): Valor {
     throw new Error("[Semantic] expected " + tipo + " but got " + tipoDe(v));
   }
   return v as Valor;
+}
+
+// mesma ideia do exigir, mas no generate(): confere o tipo da expressao sem executar
+function exigirTipo(t: string | void | undefined, tipo: string): void {
+  if (t != tipo){
+    throw new Error("[Semantic] expected " + tipo + " but got " + t);
+  }
+}
+
+// nao ha geracao de codigo para strings (Roteiro 8)
+function semStrings(): never {
+  throw new Error("[Semantic] strings are not supported in code generation");
 }
 
 class Lexer {
@@ -469,21 +482,85 @@ class Token {
 
 
 
+// junta as instrucoes geradas e escreve o .asm final (Linux, NASM elf32)
+class Code {
+  static instructions: string[] = [];
+
+  static append(code: string): void {
+    Code.instructions.push(code);
+  }
+
+  // frame: bytes que as variaveis ocupam na pilha, reservados de uma vez no inicio.
+  // Um "sub esp, 4" por declaracao quebraria com var dentro de if nao executado:
+  // o ESP ficaria acima da variavel e os push/pop sobrescreveriam o valor dela.
+  static dump(filename: string, frame: number): void {
+    const cabecalho = `section .data
+  format_out: db "%d", 10, 0 ; format do printf
+  format_in: db "%d", 0 ; format do scanf
+  scan_int: dd 0; 32-bits integer
+
+section .text
+  extern printf
+  extern scanf
+  extern fflush
+  global _start ; início do programa
+
+_start:
+  push ebp ; guarda o EBP
+  mov ebp, esp ; zera a pilha
+
+  ; aqui começa o codigo gerado:
+`;
+    const rodape = `
+  ; aqui termina o código gerado
+
+  ; o int 0x80 sai sem esvaziar o buffer do printf: sem isso a saida
+  ; se perde quando o stdout e um pipe ou arquivo
+  push 0
+  call fflush ; fflush(NULL) descarrega todos os buffers
+  add esp, 4
+
+  mov esp, ebp ; reestabelece a pilha
+  pop ebp
+
+  ; chamada da interrupcao de saida
+  mov eax, 1
+  xor ebx, ebx
+  int 0x80
+`;
+    let corpo = Code.instructions.map(i => "  " + i);
+    if (frame > 0) corpo.unshift("  sub esp, " + frame + " ; espaco das variaveis");
+    fs.writeFileSync(filename, cabecalho + "\n" + corpo.join("\n") + "\n" + rodape);
+  }
+}
+
+
 abstract class Node {
+  static id: number = 0;
   value: number | string | boolean;
   children: Node[];
+  id: number;
   abstract evaluate(st: SymbolTable): number | string | boolean | void;
+  // escreve o assembly do no; expressoes deixam o resultado em EAX e devolvem o tipo
+  abstract generate(st: SymbolTable): string | void;
   constructor(value: number | string | boolean,children: Node[]) {
     this.value = value;
     this.children = children;
+    this.id = Node.newId();
+  }
+  static newId(): number {
+    Node.id += 1;
+    return Node.id;
   }
 }
 class Variable{
   value: number | string | boolean;
   type: string;
-  constructor(value: number | string | boolean, type: string){
+  shift: number; // a variavel mora em [EBP-shift]
+  constructor(value: number | string | boolean, type: string, shift: number){
     this.value = value;
     this.type = type;
+    this.shift = shift;
   }
 }
 
@@ -494,6 +571,11 @@ class Identifier extends Node {
   }
   evaluate(st: SymbolTable): number | string | boolean {
     return st.buscar(this.value as string);
+  }
+  generate(st: SymbolTable): string {
+    let variable = st.obter(this.value as string);
+    Code.append("mov eax, [ebp-" + variable.shift + "] ; recupera " + this.value);
+    return variable.type;
   }
 }
 
@@ -508,6 +590,11 @@ class Block extends Node{
   evaluate(st: SymbolTable): void {
     for(let i = 0; i < this.children.length;i++){
       this.children[i]?.evaluate(st)
+    }
+  }
+  generate(st: SymbolTable): void {
+    for(let i = 0; i < this.children.length;i++){
+      this.children[i]?.generate(st)
     }
   }
 }
@@ -525,6 +612,13 @@ class Assignment extends Node{
     let exp = this.children[1]?.evaluate(st);
     tipoDe(exp); // erro [Semantic] se a expressao nao tem valor
     st.guardar(this.children[0]?.value as string, exp as Valor)
+  }
+  generate(st: SymbolTable): void {
+    let tipo = this.children[1]?.generate(st);
+    let nome = this.children[0]?.value as string;
+    let variable = st.obter(nome);
+    exigirTipo(tipo, variable.type);
+    Code.append("mov [ebp-" + variable.shift + "], eax ; " + nome + " = ...");
   }
 }
 
@@ -544,6 +638,19 @@ class VarDec extends Node{
       st.guardar(this.value as string, inicial as Valor);
     }
   }
+  generate(st: SymbolTable): void {
+    if (this.tipo == "string") semStrings();
+    let inicial = this.children[0]?.generate(st);
+    let variable = st.create_variable(this.value as string, this.tipo);
+    let comentario = " ; var " + this.value + " " + this.tipo + " [EBP-" + variable.shift + "]";
+    if (this.children[0]){
+      exigirTipo(inicial, this.tipo);
+      Code.append("mov [ebp-" + variable.shift + "], eax" + comentario);
+    }else {
+      // valor zero do Go: 0 para int, false para bool
+      Code.append("mov dword [ebp-" + variable.shift + "], 0" + comentario);
+    }
+  }
 }
 
 
@@ -553,7 +660,10 @@ class NoOp extends Node{
     super("",[])
   }
   evaluate(st: SymbolTable): void {
-    
+
+  }
+  generate(st: SymbolTable): void {
+
   }
 }
 
@@ -576,7 +686,16 @@ class Read extends Node {
       let input = Read.linhas![Read.indice];
       Read.indice += 1;
       return Number(input);
-        
+
+    }
+
+    generate(st: SymbolTable): string {
+      Code.append("push scan_int ; endereco de memoria de suporte");
+      Code.append("push format_in ; formato de entrada (int)");
+      Code.append("call scanf");
+      Code.append("add esp, 8 ; remove os argumentos da pilha");
+      Code.append("mov eax, dword [scan_int] ; valor lido em EAX");
+      return "int";
     }
 }
 
@@ -589,13 +708,22 @@ class Print extends Node{
     tipoDe(v); // erro [Semantic] se nao tem valor
     console.log(v)
   }
+  generate(st: SymbolTable): void {
+    this.children[0]?.generate(st);
+    Code.append("push eax ; valor a imprimir");
+    Code.append("push format_out ; formato int de saida");
+    Code.append("call printf");
+    Code.append("add esp, 8 ; limpa os argumentos");
+  }
 }
 
 
 class SymbolTable{
     private _table: Record<string, Variable>;
+    private _shift: number; // deslocamento da ultima variavel declarada
     constructor(){
       this._table = {};
+      this._shift = 0;
     }
     get table(): Record<string, Variable>{
       return this._table
@@ -603,33 +731,41 @@ class SymbolTable{
     set table(valor:Record<string, Variable>) {
       this._table = valor
     }
-    // declarar: var x tipo
-    create_variable(nome: string, type: string){
+    // total de bytes ocupados pelas variaveis na pilha
+    get shift(): number{
+      return this._shift
+    }
+    // declarar: var x tipo (cada variavel ganha 4 bytes: [EBP-4], [EBP-8], ...)
+    create_variable(nome: string, type: string): Variable{
       if (nome in this._table){
         throw new Error("[Semantic] variable already declared")
       }
       let inicial: number | string | boolean = 0;
       if (type == "string") inicial = "";
       if (type == "bool") inicial = false;
-      this._table[nome] = new Variable(inicial, type);
+      this._shift += 4;
+      let variable = new Variable(inicial, type, this._shift);
+      this._table[nome] = variable;
+      return variable;
     }
     // atribuir: x = valor (a variavel precisa ter sido declarada e o tipo tem que bater)
     guardar(nome: string, value: number | string | boolean): void{
-      let variable = this._table[nome];
-      if (variable === undefined){
-        throw new Error("[Semantic] variable not defined");
-      }
+      let variable = this.obter(nome);
       if (tipoDe(value) != variable.type){
         throw new Error("[Semantic] cannot assign " + tipoDe(value) + " to " + variable.type + " variable " + nome);
       }
       variable.value = value;
     }
     buscar(nome: string): number | string | boolean{
+      return this.obter(nome).value;
+    }
+    // a variavel inteira (tipo e deslocamento), usada no generate()
+    obter(nome: string): Variable{
       let variable = this._table[nome];
       if (variable === undefined){
         throw new Error("[Semantic] variable not defined");
       }
-      return variable.value;
+      return variable;
     }
 }
 
@@ -642,6 +778,10 @@ class IntVal extends Node {
     evaluate(st:SymbolTable): number{
       return Number(this.value);
     }
+    generate(st:SymbolTable): string{
+      Code.append("mov eax, " + this.value);
+      return "int";
+    }
 }
 
 class BoolVal extends Node {
@@ -650,6 +790,11 @@ class BoolVal extends Node {
     }
     evaluate(st:SymbolTable): boolean{
       return this.value as boolean;
+    }
+    // true = 1, false = 0
+    generate(st:SymbolTable): string{
+      Code.append("mov eax, " + (this.value ? 1 : 0));
+      return "bool";
     }
 }
 
@@ -660,6 +805,9 @@ class StringVal extends Node {
     }
     evaluate(st:SymbolTable): string{
       return String(this.value);
+    }
+    generate(st:SymbolTable): never{
+      semStrings();
     }
 }
 
@@ -682,6 +830,25 @@ class UnOp extends Node{
           throw new Error("[Semantic] Invalid Symbol " + this.value);
       }
   }
+  generate(st:SymbolTable): string {
+      let tipo = this.children[0]?.generate(st);
+
+      if (this.value == "-") {
+          exigirTipo(tipo, "int");
+          Code.append("neg eax");
+          return "int";
+      } else if (this.value == "+"){
+          exigirTipo(tipo, "int");
+          return "int";
+      }else if (this.value == "!"){
+          exigirTipo(tipo, "bool");
+          Code.append("xor eax, 1 ; bool sempre e 0 ou 1");
+          return "bool";
+      }
+      else {
+          throw new Error("[Semantic] Invalid Symbol " + this.value);
+      }
+  }
 }
 
 class If extends Node{
@@ -696,6 +863,16 @@ class If extends Node{
       this.children[2]?.evaluate(st);
     }
   }
+  generate(st: SymbolTable): void {
+    exigirTipo(this.children[0]?.generate(st), "bool");
+    Code.append("cmp eax, 0 ; se a condicao for falsa, vai pro else");
+    Code.append("je else_" + this.id);
+    this.children[1]?.generate(st);
+    Code.append("jmp exit_" + this.id);
+    Code.append("else_" + this.id + ":");
+    this.children[2]?.generate(st);
+    Code.append("exit_" + this.id + ":");
+  }
 }
 
 
@@ -709,6 +886,15 @@ class While extends Node{
       this.children[1]?.evaluate(st);
       condition = exigir(this.children[0]?.evaluate(st), "bool");
     }
+  }
+  generate(st: SymbolTable): void {
+    Code.append("loop_" + this.id + ":");
+    exigirTipo(this.children[0]?.generate(st), "bool");
+    Code.append("cmp eax, 0 ; se a condicao for falsa, sai");
+    Code.append("je exit_" + this.id);
+    this.children[1]?.generate(st);
+    Code.append("jmp loop_" + this.id);
+    Code.append("exit_" + this.id + ":");
   }
 }
 
@@ -751,7 +937,48 @@ class BinOp extends Node{
       let a = exigir(p, "int") as number;
       let b = exigir(j, "int") as number;
       if (b == 0) throw new Error("[Semantic] Division by zero");
-      return Math.trunc(a/b); 
+      return Math.trunc(a/b);
+    }
+    throw new Error("[Semantic] Invalid Symbol " + this.value)
+  }
+  // esquerda primeiro (mesma ordem do evaluate); no fim: esquerda em EAX, direita em ECX
+  generate(st:SymbolTable): string {
+    let p = this.children[0]?.generate(st);
+    Code.append("push eax ; empilha o operando da esquerda");
+    let j = this.children[1]?.generate(st);
+    Code.append("mov ecx, eax ; operando da direita");
+    Code.append("pop eax ; operando da esquerda");
+    let op = this.value;
+    if (op == "+" || op == "-" || op == "*" || op == "/"){
+      exigirTipo(p, "int");
+      exigirTipo(j, "int");
+      if (op == "+") Code.append("add eax, ecx");
+      if (op == "-") Code.append("sub eax, ecx");
+      if (op == "*") Code.append("imul ecx");
+      if (op == "/"){
+        Code.append("cdq ; estende o sinal de EAX para EDX");
+        Code.append("idiv ecx");
+      }
+      return "int";
+    }else if (op == "&&" || op == "||"){
+      exigirTipo(p, "bool");
+      exigirTipo(j, "bool");
+      Code.append(op == "&&" ? "and eax, ecx" : "or eax, ecx");
+      return "bool";
+    }else if (op == "==" || op == ">" || op == "<"){
+      if (p != j){
+        throw new Error("[Semantic] cannot compare " + p + " with " + j);
+      }
+      if (op != "==" && p == "bool"){
+        throw new Error("[Semantic] cannot order " + p + " and " + j);
+      }
+      Code.append("cmp eax, ecx");
+      Code.append("mov eax, 0");
+      Code.append("mov ecx, 1");
+      if (op == "==") Code.append("cmove eax, ecx");
+      if (op == ">") Code.append("cmovg eax, ecx");
+      if (op == "<") Code.append("cmovl eax, ecx");
+      return "bool";
     }
     throw new Error("[Semantic] Invalid Symbol " + this.value)
   }
@@ -763,7 +990,7 @@ class Prepro {
     }
 }
 
-function main(nomeArquivo: string): number|void|string{
+function main(nomeArquivo: string): void{
     if (!nomeArquivo){
         throw new Error("[Parser] error code");
     }
@@ -772,7 +999,10 @@ function main(nomeArquivo: string): number|void|string{
     let codigoLimpo = Prepro.filter(conteudo);
     let resultado = Parser.run(codigoLimpo);
     let st = new SymbolTable()
-    return resultado.evaluate(st) as void;
+    resultado.generate(st);
+    // teste.go -> teste.asm (mesma pasta, mesmo prefixo)
+    let entrada = path.parse(nomeArquivo);
+    Code.dump(path.join(entrada.dir, entrada.name + '.asm'), st.shift);
 }
 
 main(process.argv[2])
