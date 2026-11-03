@@ -42,7 +42,7 @@ class Lexer {
 
     selectNext():void{
       //let i = this.position;
-      while (this.source[this.position] == " "){
+      while (this.source[this.position] == " " || this.source[this.position] == "\t" || this.source[this.position] == "\r"){
         this.position += 1 
       }
       if (this.position >= this.source.length){
@@ -94,6 +94,11 @@ class Lexer {
       if (c == ")"){
         this.next = new Token("CLOSE_PAR",")");
         this.position = this.position +1;
+        return;
+      }
+      if (c == ","){
+        this.next = new Token("COMMA",",");
+        this.position += 1;
         return;
       }
       if (c == "{"){
@@ -168,6 +173,11 @@ class Lexer {
               this.next = new Token("ELSE",word);
           }else if (word == "Scanln"){
               this.next = new Token("READ",word);
+          }
+          else if (word == "func"){
+              this.next = new Token("FUNC",word);
+          }else if (word == "return"){
+              this.next = new Token("RETURN",word);
           }
           else if (word == "var"){
               this.next = new Token("VAR",word);
@@ -300,7 +310,11 @@ class Parser{
     }else if (Parser.lexer.next.type == "IDEN"){
         let temp = Parser.lexer.next.value as string;
         Parser.lexer.selectNext();
-        resultado = new Identifier(temp)
+        if (Parser.lexer.next.type == "OPEN_PAR"){
+          resultado = new FuncCall(temp, Parser.parseArguments());
+        }else {
+          resultado = new Identifier(temp)
+        }
     }else if (Parser.lexer.next.type == "NOT"){
         Parser.lexer.selectNext();
         resultado = new UnOp('!',Parser.parseFactor());
@@ -350,9 +364,15 @@ class Parser{
         if (Parser.lexer.next.type == "ASSIGN"){
           Parser.lexer.selectNext();
           resultado = new Assignment(name , Parser.parseBoolExpression())
+        }else if (Parser.lexer.next.type == "OPEN_PAR"){
+          resultado = new FuncCall(temp, Parser.parseArguments());
         }else {
-          throw new Error("[Parser] Expected '=' after identifier")
+          throw new Error("[Parser] Expected '=' or '(' after identifier")
         }
+      }// RETURN
+      else if (Parser.lexer.next.type == "RETURN"){
+        Parser.lexer.selectNext();
+        resultado = new Return(Parser.parseBoolExpression());
       }// Print
       else if (Parser.lexer.next.type == "PRINT"){
         Parser.lexer.selectNext(); 
@@ -417,9 +437,8 @@ class Parser{
       }else{
         throw new Error("[Parser] Unexpected token at start of statement")
       }
-      // if, for e bloco terminam em "}" e podem fechar o bloco de fora na mesma linha, ex: {{ }}
-      let composto = resultado instanceof If || resultado instanceof While || resultado instanceof Block;
-      if (composto && Parser.lexer.next.type == "CLOSE_BRA"){
+      // o statement pode fechar o bloco de fora na mesma linha, ex: {{ }} ou { return 1 }
+      if (Parser.lexer.next.type == "CLOSE_BRA"){
         return resultado;
       }
       if (Parser.lexer.next.type != "END"){
@@ -448,13 +467,73 @@ class Parser{
   }
 
 
-  //Leitura do programa linha a linha 
+  // ( arg, arg, ... ) da chamada de funcao
+  static parseArguments(): Node[]{
+    const args: Node[] = [];
+    if (Parser.lexer.next.type != "OPEN_PAR") throw new Error("[Parser] Expected '('");
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "CLOSE_PAR"){
+      args.push(Parser.parseBoolExpression());
+      while (Parser.lexer.next.type == "COMMA"){
+        Parser.lexer.selectNext();
+        args.push(Parser.parseBoolExpression());
+      }
+    }
+    if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
+    Parser.lexer.selectNext();
+    return args;
+  }
+
+  // func nome(a tipo, b tipo) tipo { ... }  ->  FuncDec(tipo, [Identifier, VarDec..., Block])
+  static parseFuncDeclaration(): FuncDec{
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "IDEN") throw new Error("[Parser] Expected function name");
+    let nome = new Identifier(Parser.lexer.next.value as string);
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "OPEN_PAR") throw new Error("[Parser] Expected '(' after function name");
+    Parser.lexer.selectNext();
+    const params: Node[] = [];
+    while (Parser.lexer.next.type != "CLOSE_PAR"){
+      if (params.length > 0){
+        if (Parser.lexer.next.type != "COMMA") throw new Error("[Parser] Expected ',' between parameters");
+        Parser.lexer.selectNext();
+      }
+      if (Parser.lexer.next.type != "IDEN") throw new Error("[Parser] Expected parameter name");
+      let param = Parser.lexer.next.value as string;
+      Parser.lexer.selectNext();
+      if (Parser.lexer.next.type != "TYPE") throw new Error("[Parser] Expected parameter type");
+      params.push(new VarDec(param, Parser.lexer.next.value as string));
+      Parser.lexer.selectNext();
+    }
+    Parser.lexer.selectNext();
+    let tipo = "";
+    if (Parser.lexer.next.type == "TYPE"){
+      tipo = Parser.lexer.next.value as string;
+      Parser.lexer.selectNext();
+    }
+    let corpo = Parser.parseBlock();
+    return new FuncDec(tipo, [nome, ...params, corpo]);
+  }
+
+  //Leitura do programa: no nivel global so ha var e func
   static parseProgram(): Block{
     const lines: Node[] = []; 
     while (Parser.lexer.next.type != "EOF"){
-      let line = Parser.parseStatement();
-      lines.push(line);
+      if (Parser.lexer.next.type == "END"){
+        Parser.lexer.selectNext();
+      }else if (Parser.lexer.next.type == "VAR"){
+        lines.push(Parser.parseStatement());
+      }else if (Parser.lexer.next.type == "FUNC"){
+        lines.push(Parser.parseFuncDeclaration());
+        if (Parser.lexer.next.type != "END" && Parser.lexer.next.type != "EOF"){
+          throw new Error("[Parser] Expected end of line")
+        }
+      }else {
+        throw new Error("[Parser] Expected var or func at global scope")
+      }
     }
+    // a execucao comeca pela main()
+    lines.push(new FuncCall("main", []));
     return new Block(lines)
   }
 
@@ -559,13 +638,15 @@ abstract class Node {
   }
 }
 class Variable{
-  value: number | string | boolean;
+  value: number | string | boolean | Node; // funcao guarda o proprio FuncDec
   type: string;
   shift: number; // a variavel mora em [EBP-shift]
-  constructor(value: number | string | boolean, type: string, shift: number){
+  isFunction: boolean;
+  constructor(value: number | string | boolean | Node, type: string, shift: number, isFunction: boolean){
     this.value = value;
     this.type = type;
     this.shift = shift;
+    this.isFunction = isFunction;
   }
 }
 
@@ -592,15 +673,93 @@ class Block extends Node{
   constructor(filhos: Node[]){
     super("",filhos)
   }
-  evaluate(st: SymbolTable): void {
+  // devolve o valor do return, se algum filho retornar
+  evaluate(st: SymbolTable): Valor | void {
     for(let i = 0; i < this.children.length;i++){
-      this.children[i]?.evaluate(st)
+      let filho = this.children[i] as Node;
+      // bloco dentro de bloco ganha escopo novo
+      let r = filho instanceof Block ? filho.evaluate(new SymbolTable(st)) : filho.evaluate(st);
+      if (filho instanceof Return) return r as Valor;
+      if ((filho instanceof Block || filho instanceof If || filho instanceof While) && r !== undefined){
+        return r as Valor;
+      }
     }
   }
   generate(st: SymbolTable): void {
     for(let i = 0; i < this.children.length;i++){
       this.children[i]?.generate(st)
     }
+  }
+}
+
+
+class Return extends Node{
+  constructor(exp: Node){
+    super("",[exp])
+  }
+  evaluate(st: SymbolTable): Valor {
+    let v = this.children[0]?.evaluate(st);
+    tipoDe(v); // erro [Semantic] se nao tem valor
+    return v as Valor;
+  }
+  generate(st: SymbolTable): never {
+    throw new Error("[Semantic] functions are not supported in code generation");
+  }
+}
+
+
+// value = tipo de retorno ("" = sem retorno); filhos: Identifier, VarDec dos parametros, Block
+class FuncDec extends Node{
+  constructor(tipo: string, filhos: Node[]){
+    super(tipo, filhos)
+  }
+  evaluate(st: SymbolTable): void {
+    st.create_variable(this.children[0]?.value as string, this.value as string, true, this);
+  }
+  generate(st: SymbolTable): never {
+    throw new Error("[Semantic] functions are not supported in code generation");
+  }
+}
+
+
+class FuncCall extends Node{
+  constructor(nome: string, args: Node[]){
+    super(nome, args)
+  }
+  evaluate(st: SymbolTable): Valor | void {
+    let nome = this.value as string;
+    let variable = st.obter(nome);
+    if (!variable.isFunction){
+      throw new Error("[Semantic] " + nome + " is not a function");
+    }
+    let dec = variable.value as FuncDec;
+    let params = dec.children.slice(1, -1) as VarDec[];
+    let corpo = dec.children[dec.children.length - 1] as Block;
+    if (params.length != this.children.length){
+      throw new Error("[Semantic] function " + nome + " expects " + params.length + " arguments but got " + this.children.length);
+    }
+    // escopo da funcao: encadeado no global, nao em quem chamou
+    let local = new SymbolTable(st.global());
+    for (let i = 0; i < params.length; i++){
+      let arg = this.children[i]?.evaluate(st);
+      tipoDe(arg);
+      let param = params[i] as VarDec;
+      local.create_variable(param.value as string, param.tipo);
+      local.guardar(param.value as string, arg as Valor);
+    }
+    let r = corpo.evaluate(local);
+    if (dec.value == ""){
+      if (r !== undefined) throw new Error("[Semantic] function " + nome + " has no return type");
+      return;
+    }
+    if (r === undefined) throw new Error("[Semantic] function " + nome + " missing return");
+    if (tipoDe(r) != dec.value){
+      throw new Error("[Semantic] function " + nome + " must return " + dec.value + " but returned " + tipoDe(r));
+    }
+    return r;
+  }
+  generate(st: SymbolTable): never {
+    throw new Error("[Semantic] functions are not supported in code generation");
   }
 }
 
@@ -637,7 +796,7 @@ class VarDec extends Node{
   }
   evaluate(st: SymbolTable): void {
     let inicial = this.children[0]?.evaluate(st);
-    st.create_variable(this.value as string, this.tipo);
+    st.create_variable(this.value as string, this.tipo, false);
     if (this.children[0]){
       tipoDe(inicial);
       st.guardar(this.value as string, inicial as Valor);
@@ -726,9 +885,15 @@ class Print extends Node{
 class SymbolTable{
     private _table: Record<string, Variable>;
     private _shift: number; // deslocamento da ultima variavel declarada
-    constructor(){
+    parent: SymbolTable | null; // escopo de fora (lista ligada reversa)
+    constructor(parent: SymbolTable | null = null){
       this._table = {};
       this._shift = 0;
+      this.parent = parent;
+    }
+    // a primeira tabela da cadeia (variaveis globais e funcoes)
+    global(): SymbolTable{
+      return this.parent ? this.parent.global() : this;
     }
     get table(): Record<string, Variable>{
       return this._table
@@ -741,7 +906,7 @@ class SymbolTable{
       return this._shift
     }
     // declarar: var x tipo (cada variavel ganha 4 bytes: [EBP-4], [EBP-8], ...)
-    create_variable(nome: string, type: string): Variable{
+    create_variable(nome: string, type: string, isFunction: boolean = false, value?: Node): Variable{
       if (nome in this._table){
         throw new Error("[Semantic] variable already declared")
       }
@@ -749,26 +914,34 @@ class SymbolTable{
       if (type == "string") inicial = "";
       if (type == "bool") inicial = false;
       this._shift += 4;
-      let variable = new Variable(inicial, type, this._shift);
+      let variable = new Variable(value ?? inicial, type, this._shift, isFunction);
       this._table[nome] = variable;
       return variable;
     }
     // atribuir: x = valor (a variavel precisa ter sido declarada e o tipo tem que bater)
     guardar(nome: string, value: number | string | boolean): void{
       let variable = this.obter(nome);
+      if (variable.isFunction){
+        throw new Error("[Semantic] cannot assign to function " + nome);
+      }
       if (tipoDe(value) != variable.type){
         throw new Error("[Semantic] cannot assign " + tipoDe(value) + " to " + variable.type + " variable " + nome);
       }
       variable.value = value;
     }
     buscar(nome: string): number | string | boolean{
-      return this.obter(nome).value;
+      let variable = this.obter(nome);
+      if (variable.isFunction){
+        throw new Error("[Semantic] " + nome + " is a function, not a variable");
+      }
+      return variable.value as Valor;
     }
-    // a variavel inteira (tipo e deslocamento), usada no generate()
+    // a variavel inteira (tipo e deslocamento); busca nos escopos de fora se nao achar aqui
     obter(nome: string): Variable{
       let variable = this._table[nome];
       if (variable === undefined){
-        throw new Error("[Semantic] variable not defined");
+        if (this.parent) return this.parent.obter(nome);
+        throw new Error("[Semantic] variable not defined: " + nome);
       }
       return variable;
     }
@@ -860,12 +1033,12 @@ class If extends Node{
   constructor(value:Node, c1:Node,c2?:Node){
     super("",c2 ? [value,c1,c2] : [value,c1])
   }
-  evaluate(st: SymbolTable): void {
+  evaluate(st: SymbolTable): Valor | void {
     let condition = exigir(this.children[0]?.evaluate(st), "bool");
     if (condition){
-      this.children[1]?.evaluate(st);
+      return this.children[1]?.evaluate(new SymbolTable(st)) as Valor | void;
     }else if (this.children[2]){
-      this.children[2]?.evaluate(st);
+      return this.children[2]?.evaluate(new SymbolTable(st)) as Valor | void;
     }
   }
   generate(st: SymbolTable): void {
@@ -885,10 +1058,11 @@ class While extends Node{
   constructor(value:Node,op:Node){
     super("",[value,op])
   }
-  evaluate(st: SymbolTable): void {
+  evaluate(st: SymbolTable): Valor | void {
     let condition = exigir(this.children[0]?.evaluate(st), "bool");
     while (condition){
-      this.children[1]?.evaluate(st);
+      let r = this.children[1]?.evaluate(new SymbolTable(st));
+      if (r !== undefined) return r as Valor;
       condition = exigir(this.children[0]?.evaluate(st), "bool");
     }
   }
@@ -1004,10 +1178,7 @@ function main(nomeArquivo: string): void{
     let codigoLimpo = Prepro.filter(conteudo);
     let resultado = Parser.run(codigoLimpo);
     let st = new SymbolTable()
-    resultado.generate(st);
-    // teste.go -> teste.asm (mesma pasta, mesmo prefixo)
-    let entrada = path.parse(nomeArquivo);
-    Code.dump(path.join(entrada.dir, entrada.name + '.asm'), st.shift);
+    resultado.evaluate(st);
 }
 
 main(process.argv[2])
