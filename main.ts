@@ -437,12 +437,9 @@ class Parser{
       }else{
         throw new Error("[Parser] Unexpected token at start of statement")
       }
-      // o statement pode fechar o bloco de fora na mesma linha, ex: {{ }} ou { return 1 }
-      if (Parser.lexer.next.type == "CLOSE_BRA"){
-        return resultado;
-      }
+      // todo statement termina com "\n" (inclusive if, for e bloco)
       if (Parser.lexer.next.type != "END"){
-        throw new Error("[Parser] Expected end of line")
+        throw new Error("[Parser] Unexpected token " + Parser.lexer.next.type + ", expected end of line")
       }
       Parser.lexer.selectNext();
 
@@ -453,10 +450,11 @@ class Parser{
     const lines: Node[] = [];
     if(Parser.lexer.next.type == "OPEN_BRA"){
       Parser.lexer.selectNext();
-      // o "\n" depois do "{" e opcional: o teste do corretor usa {{ }} numa linha so
-      if (Parser.lexer.next.type == "END"){
-        Parser.lexer.selectNext();
+      // o "{" precisa terminar a linha: "{ }" na mesma linha e erro
+      if (Parser.lexer.next.type != "END"){
+        throw new Error("[Parser] Unexpected token " + Parser.lexer.next.type + ", expected newline after {");
       }
+      Parser.lexer.selectNext();
       while (Parser.lexer.next.type != "CLOSE_BRA"){
         let line = Parser.parseStatement();
         lines.push(line);
