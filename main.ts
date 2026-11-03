@@ -1,14 +1,64 @@
 const fs = require('fs');
 const path = require('path');
 
-type Valor = number | string | boolean;
+type Valor = number | string | boolean | StructValue;
 
 // "int" | "string" | "bool" a partir do valor que o JS guarda
 function tipoDe(v: Valor | void | undefined): string {
   if (typeof v === "number") return "int";
   if (typeof v === "string") return "string";
   if (typeof v === "boolean") return "bool";
+  if (v instanceof StructValue) return v.tipo;
   throw new Error("[Semantic] expression has no value");
+}
+
+// valor zero de cada tipo; uma struct vira uma instancia nova com os campos zerados
+function valorZero(tipo: string, pilha: string[] = []): Valor {
+  if (tipo == "int") return 0;
+  if (tipo == "string") return "";
+  if (tipo == "bool") return false;
+  let molde = StructDec.moldes.get(tipo);
+  if (molde === undefined){
+    throw new Error("[Semantic] type " + tipo + " not defined");
+  }
+  // struct que contem ela mesma nunca terminaria de ser criada
+  if (pilha.includes(tipo)){
+    throw new Error("[Semantic] invalid recursive type " + tipo);
+  }
+  let campos = new Map<string, Variable>();
+  for (let campo of molde.children as VarDec[]){
+    campos.set(campo.value as string, new Variable(valorZero(campo.tipo, [...pilha, tipo]), campo.tipo, 0, false));
+  }
+  return new StructValue(tipo, campos);
+}
+
+// struct tem semantica de valor (como no Go): atribuir copia os campos
+function copiar(v: Valor): Valor {
+  if (!(v instanceof StructValue)) return v;
+  let campos = new Map<string, Variable>();
+  for (let [nome, campo] of v.campos){
+    campos.set(nome, new Variable(copiar(campo.value as Valor), campo.type, 0, false));
+  }
+  return new StructValue(v.tipo, campos);
+}
+
+// == compara struct campo a campo
+function iguais(a: Valor, b: Valor): boolean {
+  if (a instanceof StructValue && b instanceof StructValue){
+    for (let [nome, campo] of a.campos){
+      if (!iguais(campo.value as Valor, b.campos.get(nome)?.value as Valor)) return false;
+    }
+    return true;
+  }
+  return a === b;
+}
+
+// Println de struct imprime como o Go: {1 {2} abc}
+function formatar(v: Valor): string {
+  if (v instanceof StructValue){
+    return "{" + [...v.campos.values()].map(c => formatar(c.value as Valor)).join(" ") + "}";
+  }
+  return String(v);
 }
 
 // confere o tipo e devolve o valor; erro [Semantic] se nao bater
@@ -96,6 +146,11 @@ class Lexer {
         this.position = this.position +1;
         return;
       }
+      if (c == "."){
+        this.next = new Token("DOT",".");
+        this.position += 1;
+        return;
+      }
       if (c == ","){
         this.next = new Token("COMMA",",");
         this.position += 1;
@@ -178,6 +233,10 @@ class Lexer {
               this.next = new Token("FUNC",word);
           }else if (word == "return"){
               this.next = new Token("RETURN",word);
+          }else if (word == "type"){
+              this.next = new Token("TYPE_DEF",word);
+          }else if (word == "struct"){
+              this.next = new Token("STRUCT",word);
           }
           else if (word == "var"){
               this.next = new Token("VAR",word);
@@ -218,6 +277,7 @@ class Lexer {
 
 class Parser{
   static lexer: Lexer;
+  static tiposUsados: string[] = []; // nomes de struct usados como tipo, conferidos no fim do parse
   // OR 
   static parseBoolExpression(): Node{
     let resultado = Parser.parseBoolTerm();
@@ -301,6 +361,7 @@ class Parser{
         resultado = Parser.parseBoolExpression();
         if (Parser.lexer.next.type != "CLOSE_PAR") throw new Error("[Parser] Par opend with now close");
         Parser.lexer.selectNext();
+        resultado = Parser.parseFields(resultado); // (x).campo
     }else if (Parser.lexer.next.type == "MINUS"){
         Parser.lexer.selectNext();
         resultado = new UnOp('-', Parser.parseFactor());
@@ -315,6 +376,7 @@ class Parser{
         }else {
           resultado = new Identifier(temp)
         }
+        resultado = Parser.parseFields(resultado);
     }else if (Parser.lexer.next.type == "NOT"){
         Parser.lexer.selectNext();
         resultado = new UnOp('!',Parser.parseFactor());
@@ -360,11 +422,11 @@ class Parser{
       if (Parser.lexer.next.type == "IDEN"){
         let temp = Parser.lexer.next.value as string;
         Parser.lexer.selectNext();
-        let name = new Identifier(temp)
+        let name = Parser.parseFields(new Identifier(temp))
         if (Parser.lexer.next.type == "ASSIGN"){
           Parser.lexer.selectNext();
           resultado = new Assignment(name , Parser.parseBoolExpression())
-        }else if (Parser.lexer.next.type == "OPEN_PAR"){
+        }else if (Parser.lexer.next.type == "OPEN_PAR" && name instanceof Identifier){
           resultado = new FuncCall(temp, Parser.parseArguments());
         }else {
           throw new Error("[Parser] Expected '=' or '(' after identifier")
@@ -414,11 +476,7 @@ class Parser{
         }
         let nome = Parser.lexer.next.value as string;
         Parser.lexer.selectNext();
-        if (Parser.lexer.next.type != "TYPE"){
-          throw new Error("[Parser] Expected type after identifier")
-        }
-        let tipo = Parser.lexer.next.value as string;
-        Parser.lexer.selectNext();
+        let tipo = Parser.parseType();
         if (Parser.lexer.next.type == "ASSIGN"){
           Parser.lexer.selectNext();
           resultado = new VarDec(nome, tipo, Parser.parseBoolExpression());
@@ -499,40 +557,130 @@ class Parser{
       if (Parser.lexer.next.type != "IDEN") throw new Error("[Parser] Expected parameter name");
       let param = Parser.lexer.next.value as string;
       Parser.lexer.selectNext();
-      if (Parser.lexer.next.type != "TYPE") throw new Error("[Parser] Expected parameter type");
-      params.push(new VarDec(param, Parser.lexer.next.value as string));
-      Parser.lexer.selectNext();
+      params.push(new VarDec(param, Parser.parseType()));
     }
     Parser.lexer.selectNext();
     let tipo = "";
-    if (Parser.lexer.next.type == "TYPE"){
-      tipo = Parser.lexer.next.value as string;
-      Parser.lexer.selectNext();
+    if (Parser.lexer.next.type == "TYPE" || Parser.lexer.next.type == "IDEN"){
+      tipo = Parser.parseType();
     }
     let corpo = Parser.parseBlock();
     return new FuncDec(tipo, [nome, ...params, corpo]);
   }
 
-  //Leitura do programa: no nivel global so ha var e func
+  // int, string, bool ou o nome de uma struct
+  static parseType(): string{
+    if (Parser.lexer.next.type != "TYPE" && Parser.lexer.next.type != "IDEN"){
+      throw new Error("[Parser] Expected type");
+    }
+    let tipo = Parser.lexer.next.value as string;
+    if (Parser.lexer.next.type == "IDEN") Parser.tiposUsados.push(tipo);
+    Parser.lexer.selectNext();
+    return tipo;
+  }
+
+  // x.campo.campo...
+  static parseFields(base: Node): Node{
+    while (Parser.lexer.next.type == "DOT"){
+      Parser.lexer.selectNext();
+      if (Parser.lexer.next.type != "IDEN") throw new Error("[Parser] Expected field name after '.'");
+      base = new Field(base, Parser.lexer.next.value as string);
+      Parser.lexer.selectNext();
+    }
+    return base;
+  }
+
+  // type Nome struct { var campo tipo ... }  ->  StructDec(Nome, [VarDec...]); campo nao tem inicializacao
+  static parseStructDeclaration(): StructDec{
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "IDEN") throw new Error("[Parser] Expected struct name");
+    let nome = Parser.lexer.next.value as string;
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "STRUCT") throw new Error("[Parser] Expected struct after type name");
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "OPEN_BRA") throw new Error("[Parser] Expected {");
+    Parser.lexer.selectNext();
+    if (Parser.lexer.next.type != "END"){
+      throw new Error("[Parser] Unexpected token " + Parser.lexer.next.type + ", expected newline after {");
+    }
+    Parser.lexer.selectNext();
+    const campos: VarDec[] = [];
+    while (Parser.lexer.next.type != "CLOSE_BRA"){
+      if (Parser.lexer.next.type == "END"){
+        Parser.lexer.selectNext();
+        continue;
+      }
+      // "var" e opcional: aceita tambem o campo no estilo do Go (b int)
+      if (Parser.lexer.next.type == "VAR") Parser.lexer.selectNext();
+      if (Parser.lexer.next.type != "IDEN") throw new Error("[Parser] Expected field name");
+      let campo = Parser.lexer.next.value as string;
+      Parser.lexer.selectNext();
+      if (campos.some(c => c.value == campo)){
+        throw new Error("[Semantic] duplicate field " + campo + " in struct " + nome);
+      }
+      let tipo = Parser.parseType();
+      if (Parser.lexer.next.type == "ASSIGN"){
+        throw new Error("[Parser] struct fields cannot be initialized");
+      }
+      if (Parser.lexer.next.type != "END"){
+        throw new Error("[Parser] Unexpected token " + Parser.lexer.next.type + ", expected end of line");
+      }
+      Parser.lexer.selectNext();
+      campos.push(new VarDec(campo, tipo));
+    }
+    Parser.lexer.selectNext();
+    return new StructDec(nome, campos);
+  }
+
+  //Leitura do programa: no nivel global so ha var, func e type
   static parseProgram(): Block{
+    const tipos: Node[] = []; // structs vem antes de tudo: podem ser usadas antes da declaracao
     const lines: Node[] = []; 
     while (Parser.lexer.next.type != "EOF"){
       if (Parser.lexer.next.type == "END"){
         Parser.lexer.selectNext();
       }else if (Parser.lexer.next.type == "VAR"){
         lines.push(Parser.parseStatement());
-      }else if (Parser.lexer.next.type == "FUNC"){
-        lines.push(Parser.parseFuncDeclaration());
+      }else if (Parser.lexer.next.type == "FUNC" || Parser.lexer.next.type == "TYPE_DEF"){
+        if (Parser.lexer.next.type == "FUNC") lines.push(Parser.parseFuncDeclaration());
+        else tipos.push(Parser.parseStructDeclaration());
         if (Parser.lexer.next.type != "END" && Parser.lexer.next.type != "EOF"){
           throw new Error("[Parser] Expected end of line")
         }
       }else {
-        throw new Error("[Parser] Expected var or func at global scope")
+        throw new Error("[Parser] Expected var, func or type at global scope")
       }
     }
+    Parser.checarTipos(tipos as StructDec[]);
     // a execucao comeca pela main()
     lines.push(new FuncCall("main", []));
-    return new Block(lines)
+    return new Block([...tipos, ...lines])
+  }
+
+  // como no Go, tipo inexistente ou struct recursiva e erro mesmo em codigo que nunca roda
+  static checarTipos(structs: StructDec[]): void{
+    const moldes = new Map<string, StructDec>();
+    for (let s of structs){
+      if (moldes.has(s.value as string)) throw new Error("[Semantic] struct " + s.value + " already declared");
+      moldes.set(s.value as string, s);
+    }
+    for (let tipo of Parser.tiposUsados){
+      if (!moldes.has(tipo)) throw new Error("[Semantic] type " + tipo + " not defined");
+    }
+    // uma struct que chega nela mesma pelos campos nunca terminaria de ser criada
+    const prontas = new Set<string>();
+    const caminho = new Set<string>();
+    const visita = (nome: string): void => {
+      if (prontas.has(nome)) return;
+      if (caminho.has(nome)) throw new Error("[Semantic] invalid recursive type " + nome);
+      caminho.add(nome);
+      for (let campo of moldes.get(nome)?.children as VarDec[]){
+        if (moldes.has(campo.tipo)) visita(campo.tipo);
+      }
+      caminho.delete(nome);
+      prontas.add(nome);
+    };
+    for (let nome of moldes.keys()) visita(nome);
   }
 
 
@@ -622,7 +770,7 @@ abstract class Node {
   value: number | string | boolean;
   children: Node[];
   id: number;
-  abstract evaluate(st: SymbolTable): number | string | boolean | void;
+  abstract evaluate(st: SymbolTable): Valor | void;
   // escreve o assembly do no; expressoes deixam o resultado em EAX e devolvem o tipo
   abstract generate(st: SymbolTable): string | void;
   constructor(value: number | string | boolean,children: Node[]) {
@@ -636,11 +784,11 @@ abstract class Node {
   }
 }
 class Variable{
-  value: number | string | boolean | Node; // funcao guarda o proprio FuncDec
+  value: Valor | Node; // funcao guarda o proprio FuncDec
   type: string;
   shift: number; // a variavel mora em [EBP-shift]
   isFunction: boolean;
-  constructor(value: number | string | boolean | Node, type: string, shift: number, isFunction: boolean){
+  constructor(value: Valor | Node, type: string, shift: number, isFunction: boolean){
     this.value = value;
     this.type = type;
     this.shift = shift;
@@ -653,7 +801,7 @@ class Identifier extends Node {
   constructor(value:string){
     super(value,[])
   }
-  evaluate(st: SymbolTable): number | string | boolean {
+  evaluate(st: SymbolTable): Valor {
     return st.buscar(this.value as string);
   }
   generate(st: SymbolTable): string {
@@ -698,7 +846,7 @@ class Return extends Node{
   evaluate(st: SymbolTable): Valor {
     let v = this.children[0]?.evaluate(st);
     tipoDe(v); // erro [Semantic] se nao tem valor
-    return v as Valor;
+    return copiar(v as Valor); // struct volta como copia, igual ao Go
   }
   generate(st: SymbolTable): never {
     throw new Error("[Semantic] functions are not supported in code generation");
@@ -773,7 +921,17 @@ class Assignment extends Node{
   evaluate(st: SymbolTable): void {
     let exp = this.children[1]?.evaluate(st);
     tipoDe(exp); // erro [Semantic] se a expressao nao tem valor
-    st.guardar(this.children[0]?.value as string, exp as Valor)
+    let alvo = this.children[0];
+    // x.campo = ...: o tipo vem do campo da struct
+    if (alvo instanceof Field){
+      let campo = alvo.slot(st);
+      if (tipoDe(exp) != campo.type){
+        throw new Error("[Semantic] cannot assign " + tipoDe(exp) + " to " + campo.type + " field " + alvo.value);
+      }
+      campo.value = copiar(exp as Valor);
+      return;
+    }
+    st.guardar(alvo?.value as string, exp as Valor)
   }
   generate(st: SymbolTable): void {
     let tipo = this.children[1]?.generate(st);
@@ -868,7 +1026,7 @@ class Print extends Node{
   evaluate(st: SymbolTable): void {
     let v = this.children[0]?.evaluate(st);
     tipoDe(v); // erro [Semantic] se nao tem valor
-    console.log(v)
+    console.log(formatar(v as Valor)) // String(v): o -0 do JS sai como 0, igual ao Go
   }
   generate(st: SymbolTable): void {
     this.children[0]?.generate(st);
@@ -885,7 +1043,7 @@ class SymbolTable{
     private _shift: number; // deslocamento da ultima variavel declarada
     parent: SymbolTable | null; // escopo de fora (lista ligada reversa)
     constructor(parent: SymbolTable | null = null){
-      this._table = {};
+      this._table = Object.create(null); // sem prototipo: toString, constructor... sao nomes livres
       this._shift = 0;
       this.parent = parent;
     }
@@ -908,16 +1066,19 @@ class SymbolTable{
       if (nome in this._table){
         throw new Error("[Semantic] variable already declared")
       }
-      let inicial: number | string | boolean = 0;
-      if (type == "string") inicial = "";
-      if (type == "bool") inicial = false;
+      // no escopo global o nome de uma struct tambem esta ocupado (como no Go)
+      if (this.parent === null && StructDec.moldes.has(nome)){
+        throw new Error("[Semantic] " + nome + " already declared as a struct")
+      }
+      // funcao guarda o proprio no; variavel comeca com o valor zero do tipo
+      let inicial = value ?? valorZero(type);
       this._shift += 4;
-      let variable = new Variable(value ?? inicial, type, this._shift, isFunction);
+      let variable = new Variable(inicial, type, this._shift, isFunction);
       this._table[nome] = variable;
       return variable;
     }
     // atribuir: x = valor (a variavel precisa ter sido declarada e o tipo tem que bater)
-    guardar(nome: string, value: number | string | boolean): void{
+    guardar(nome: string, value: Valor): void{
       let variable = this.obter(nome);
       if (variable.isFunction){
         throw new Error("[Semantic] cannot assign to function " + nome);
@@ -925,9 +1086,9 @@ class SymbolTable{
       if (tipoDe(value) != variable.type){
         throw new Error("[Semantic] cannot assign " + tipoDe(value) + " to " + variable.type + " variable " + nome);
       }
-      variable.value = value;
+      variable.value = copiar(value);
     }
-    buscar(nome: string): number | string | boolean{
+    buscar(nome: string): Valor{
       let variable = this.obter(nome);
       if (variable.isFunction){
         throw new Error("[Semantic] " + nome + " is a function, not a variable");
@@ -1084,6 +1245,9 @@ class BinOp extends Node{
     let j = this.children[1]?.evaluate(st);
     let op = this.value;
     if (op == "+"){
+      if (p instanceof StructValue || j instanceof StructValue){
+        throw new Error("[Semantic] cannot add " + tipoDe(p) + " and " + tipoDe(j));
+      }
       if (tipoDe(p) == "string" || tipoDe(j) == "string"){
         return String(p) + String(j);
       }
@@ -1100,9 +1264,9 @@ class BinOp extends Node{
       if (tipoDe(p) != tipoDe(j)){
         throw new Error("[Semantic] cannot compare " + tipoDe(p) + " with " + tipoDe(j));
       }
-      return p === j;
+      return iguais(p as Valor, j as Valor);
     }else if (op == ">" || op == "<"){
-      if (tipoDe(p) != tipoDe(j) || tipoDe(p) == "bool"){
+      if (tipoDe(p) != tipoDe(j) || (tipoDe(p) != "int" && tipoDe(p) != "string")){
         throw new Error("[Semantic] cannot order " + tipoDe(p) + " and " + tipoDe(j));
       }
       if (typeof p === "number" && typeof j === "number"){
@@ -1161,9 +1325,77 @@ class BinOp extends Node{
   }
 }
 
+// instancia de uma struct: cada campo e uma Variable com o seu tipo
+class StructValue {
+  tipo: string;
+  campos: Map<string, Variable>;
+  constructor(tipo: string, campos: Map<string, Variable>){
+    this.tipo = tipo;
+    this.campos = campos;
+  }
+}
+
+
+// type Nome struct { ... }: assim como a funcao, e so o molde; a instancia nasce no var x Nome
+class StructDec extends Node{
+  static moldes: Map<string, StructDec> = new Map();
+  constructor(nome: string, campos: VarDec[]){
+    super(nome, campos)
+  }
+  evaluate(st: SymbolTable): void {
+    let nome = this.value as string;
+    if (StructDec.moldes.has(nome)){
+      throw new Error("[Semantic] struct " + nome + " already declared");
+    }
+    StructDec.moldes.set(nome, this);
+  }
+  generate(st: SymbolTable): never {
+    throw new Error("[Semantic] structs are not supported in code generation");
+  }
+}
+
+
+// x.campo: o filho e de onde sai a struct (Identifier, outro Field ou FuncCall)
+class Field extends Node{
+  constructor(base: Node, campo: string){
+    super(campo, [base])
+  }
+  // a Variable do campo dentro da instancia: serve para ler e para atribuir
+  slot(st: SymbolTable): Variable {
+    let base = this.children[0]?.evaluate(st);
+    if (!(base instanceof StructValue)){
+      throw new Error("[Semantic] " + tipoDe(base) + " has no field " + this.value);
+    }
+    let campo = base.campos.get(this.value as string);
+    if (campo === undefined){
+      throw new Error("[Semantic] struct " + base.tipo + " has no field " + this.value);
+    }
+    return campo;
+  }
+  evaluate(st: SymbolTable): Valor {
+    return this.slot(st).value as Valor;
+  }
+  generate(st: SymbolTable): never {
+    throw new Error("[Semantic] structs are not supported in code generation");
+  }
+}
+
 class Prepro {
+    // tira os comentarios //, mas nao dentro de uma string ("http://...")
     static filter(code: string): string {
-        return code.replace(/\/\/[^\n]*/g, '');
+        let saida = "";
+        let emString = false;
+        for (let i = 0; i < code.length; i++){
+            let c = code.charAt(i);
+            if (c == '"') emString = !emString;
+            if (!emString && c == "/" && code.charAt(i + 1) == "/"){
+                while (i < code.length && code.charAt(i) != "\n") i++;
+                i--; // o "\n" continua no codigo
+                continue;
+            }
+            saida += c;
+        }
+        return saida;
     }
 }
 
